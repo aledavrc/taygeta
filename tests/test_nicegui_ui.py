@@ -12,7 +12,9 @@ en proceso). Notas importantes:
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 import pytest
@@ -253,22 +255,10 @@ async def test_add_figure_area_renders_cropper_with_real_source(
         await user.should_see("Añadir figura")
 
 
-async def test_add_figure_keeps_cropper_selection(ui_env: None, tmp_path: Path) -> None:
-    """Regresión: el recuadro se conserva al soltar y la figura se añade.
-
-    Antes, ``DragBoxCropper`` borraba el rectángulo en ``mouseup`` y el
-    ``on_confirm`` guardaba ``left/top/width/height`` en lugar de ``bbox``, de
-    modo que el alta siempre avisaba de que no había selección.
-    """
-    from nicegui.testing import user_simulation
-    from PIL import Image
-
+def _cropper_root(source: Path, staged: StagedQuestion, storage: Any) -> Callable[[], None]:
+    """Devuelve un ``root`` con un único ``QuestionPanel`` para la simulación."""
     settings = get_settings()
     database = Database(settings=settings)
-    staged = _make_questions()[1]  # sin figuras: un único cropper en el panel
-    source = tmp_path / "pagina.png"
-    Image.new("RGB", (600, 800), "white").save(source)
-    storage = _FakeStorage()
 
     def root() -> None:
         session = SessionState()
@@ -284,6 +274,24 @@ async def test_add_figure_keeps_cropper_selection(ui_env: None, tmp_path: Path) 
             database=database,
             pipeline=None,
         )
+
+    return root
+
+
+async def test_add_figure_keeps_cropper_selection(ui_env: None, tmp_path: Path) -> None:
+    """Regresión: el recuadro se conserva al soltar y la figura se añade.
+
+    Antes, ``DragBoxCropper`` borraba el rectángulo en ``mouseup`` y el
+    ``on_confirm`` guardaba ``left/top/width/height`` en lugar de ``bbox``, de
+    modo que el alta siempre avisaba de que no había selección.
+    """
+    from nicegui.testing import user_simulation
+    from PIL import Image
+
+    staged = _make_questions()[1]  # sin figuras: un único cropper en el panel
+    source = tmp_path / "pagina.png"
+    Image.new("RGB", (600, 800), "white").save(source)
+    root = _cropper_root(source, staged, _FakeStorage())
 
     async with user_simulation(root=root) as user:
         await user.open("/")
@@ -315,3 +323,47 @@ async def test_add_figure_keeps_cropper_selection(ui_env: None, tmp_path: Path) 
 
         user.find("Añadir figura").click()
         await user.should_see("fig:1 — recorte (página 1)", retries=15)
+
+
+async def test_cropper_zoom_controls(ui_env: None, tmp_path: Path) -> None:
+    """Los controles de zoom acercan, alejan y reinician el cropper.
+
+    El zoom redimensiona la imagen por *layout* (no con ``transform``), así que
+    el mapeo de coordenadas de ``ui.interactive_image`` sigue siendo exacto.
+    """
+    from nicegui.testing import user_simulation
+    from PIL import Image
+
+    staged = _make_questions()[1]  # sin figuras: un único cropper en el panel
+    source = tmp_path / "pagina.png"
+    Image.new("RGB", (600, 800), "white").save(source)
+    root = _cropper_root(source, staged, _FakeStorage())
+
+    async with user_simulation(root=root) as user:
+        await user.open("/")
+        await user.should_see("Pregunta 1 — NEEDS_ATTENTION")
+
+        user.find("Figuras nuevas").click()
+        await user.should_see("➕ Añadir nueva figura")
+        add_expansion = next(
+            element
+            for element in user.find("➕ Añadir nueva figura").elements
+            if isinstance(element, ui.expansion)
+        )
+        with user:
+            add_expansion.value = True
+
+        # El cropper arranca ajustado a la vista.
+        await user.should_see("100 %")
+
+        # Acercar sube en pasos de 0,5; el reinicio vuelve al 100 %.
+        user.find("cropper-zoom-in").click()
+        await user.should_see("150 %")
+        user.find("cropper-zoom-in").click()
+        await user.should_see("200 %")
+        user.find("cropper-zoom-reset").click()
+        await user.should_see("100 %")
+
+        # Alejar por debajo del mínimo no baja del 100 % (el clamp lo impide).
+        user.find("cropper-zoom-out").click()
+        await user.should_see("100 %")

@@ -5,7 +5,8 @@ Responsabilidades:
 * Abrir documentos PDF (y también imágenes PNG/JPG) con PyMuPDF (``fitz``).
 * Rasterizar las páginas a 300 DPI por defecto.
 * Desnormalizar las BBox de escala 0-1000 al tamaño real de la página aplicando
-  un padding preventivo del 1.5 %.
+  un padding preventivo del 1 % en los recortes automáticos; los recortes
+  manuales de la UI no añaden padding (recorte exacto).
 * Mantener el índice físico real de página basado en cero y conservar las
   coordenadas necesarias para asociar cada figura con el enunciado exacto.
 * Detectar figuras y diagramas relevantes y asignar placeholders ``{{fig:N}}``
@@ -44,6 +45,7 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "DEFAULT_DPI",
     "DEFAULT_PADDING",
+    "MANUAL_CROP_PADDING",
     "MAX_AREA_RATIO",
     "NORMALIZED_MAX",
     "SUPPORTED_SUFFIXES",
@@ -74,8 +76,12 @@ DEFAULT_DPI = 300
 #: Unidades de la BBox normalizada.
 NORMALIZED_MAX = 1000
 
-#: Padding preventivo por defecto (1.5 % del tamaño de página).
-DEFAULT_PADDING = 0.015
+#: Padding preventivo por defecto de los recortes automáticos (1 % del tamaño
+#: de página). Compensa las BBox imprecisas del detector/LLM.
+DEFAULT_PADDING = 0.01
+
+#: Padding de los recortes manuales de la UI: sin margen, ajustados al recuadro.
+MANUAL_CROP_PADDING = 0.0
 
 #: Fracción máxima del área de página que puede ocupar una figura. Un candidato
 #: que cubre la página entera es, casi siempre, el fondo del documento o la
@@ -282,7 +288,7 @@ def denormalize_bbox(
 
     La BBox tiene formato ``[ymin, xmin, ymax, xmax]``. ``page_width`` y
     ``page_height`` se expresan en la unidad destino (puntos de página). Se
-    aplica un padding preventivo (por defecto el 1.5 % del tamaño de página) en
+    aplica un padding preventivo (por defecto el 1 % del tamaño de página) en
     los cuatro lados y, opcionalmente, se recorta al área de la página.
 
     Returns:
@@ -616,12 +622,15 @@ def crop_figure_bytes(
     bbox: Sequence[int],
     *,
     dpi: int = DEFAULT_DPI,
-    padding: float = DEFAULT_PADDING,
+    padding: float = MANUAL_CROP_PADDING,
 ) -> bytes:
     """Recorta una región normalizada de una página y devuelve sus bytes PNG.
 
-    Usa la misma geometría que :func:`extract_and_save_figures` (padding
-    preventivo, desnormalización y rasterización del clip), pero devuelve los
+    Pensada para los recortes manuales de la UI: por defecto **no** añade
+    padding (``MANUAL_CROP_PADDING = 0``), de modo que el PNG coincide
+    exactamente con el recuadro seleccionado por el usuario. Comparte la
+    desnormalización y el rasterizado de :func:`extract_and_save_figures` (que
+    sí aplica el padding preventivo de las BBox automáticas), pero devuelve los
     bytes en memoria: así la UI puede sobrescribir un asset en S3 sin tocar el
     sistema de archivos ni dejar copias temporales.
 

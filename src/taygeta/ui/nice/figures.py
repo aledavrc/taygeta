@@ -2,10 +2,11 @@
 
 El ``DragBoxCropper`` dibuja el recuadro de recorte con arrastre sobre
 ``ui.interactive_image`` (overlay SVG en coordenadas de píxeles de la imagen,
-sin dependencias npm) y entrega el recuadro en píxeles de la imagen original;
-las funciones ``crop_new_figure`` y ``replace_figure_crop`` recortan, suben y
-registran figuras reutilizando los helpers puros de ``figure_editing`` y los
-clientes compartidos de rasterización/almacenamiento.
+sin dependencias npm), entrega el recuadro en píxeles de la imagen original y
+ofrece zoom (1×-4×) para ver con precisión qué se va a recortar; las funciones
+``crop_new_figure`` y ``replace_figure_crop`` recortan, suben y registran
+figuras reutilizando los helpers puros de ``figure_editing`` y los clientes
+compartidos de rasterización/almacenamiento.
 """
 
 from __future__ import annotations
@@ -38,16 +39,18 @@ def figure_pil(storage: ObjectStorage | None, asset_path: str | None) -> Image.I
 
 
 def page_pil(
-    source_path: str | Path | None, page_index: int
+    source_path: str | Path | None, page_index: int, *, dpi: int = 300
 ) -> tuple[Image.Image, int, int] | None:
     """Rasteriza la página ``page_index`` como imagen PIL + tamaño en píxeles.
 
-    Devuelve ``(imagen, width_px, height_px)`` o ``None`` si el origen no está
-    disponible o la página no existe.
+    Usa 300 DPI (igual que los recortes) para que el zoom del cropper se vea
+    nítido en documentos PDF; en escaneos el rasterizado conserva la resolución
+    nativa. Devuelve ``(imagen, width_px, height_px)`` o ``None`` si el origen
+    no está disponible o la página no existe.
     """
     if source_path is None:
         return None
-    raster = page_image_raster(source_path, int(page_index))
+    raster = page_image_raster(source_path, int(page_index), dpi=dpi)
     if raster is None:
         return None
     image = Image.open(io.BytesIO(raster.png_bytes))
@@ -152,7 +155,16 @@ class DragBoxCropper:
     La caja confirmada se conserva dibujada tras soltar el ratón (se guarda en
     ``self.box``), de modo que la selección no desaparece. ``initial_box``
     permite sembrar el cropper con la región actual de una figura.
+
+    Incluye controles de zoom (1×-4×): la imagen se redimensiona por *layout*
+    dentro de un contenedor con scroll (nunca con ``transform: scale()``), así
+    que el mapeo de NiceGUI ``offsetX * naturalWidth / clientWidth`` y el
+    ``viewBox`` del SVG siguen siendo exactos a cualquier ampliación.
     """
+
+    MIN_ZOOM = 1.0
+    MAX_ZOOM = 4.0
+    ZOOM_STEP = 0.5
 
     def __init__(
         self,
@@ -171,14 +183,64 @@ class DragBoxCropper:
         self.current: tuple[int, int] | None = None
         #: Última caja confirmada (o la semilla inicial); se redibuja al soltar.
         self.box: dict[str, int] | None = initial_box
+        self.zoom = self.MIN_ZOOM
         _caption(caption)
-        self.image = ui.interactive_image(
-            source,
-            on_mouse=self._on_mouse,
-            events=["mousedown", "mousemove", "mouseup"],
-            cross=True,
-        ).classes("w-full border border-gray-300 rounded")
+
+        with ui.row().classes("items-center gap-2"):
+            self._zoom_out = (
+                ui.button(
+                    icon="remove",
+                    on_click=lambda: self._set_zoom(self.zoom - self.ZOOM_STEP),
+                )
+                .props("dense round flat")
+                .mark("cropper-zoom-out")
+            )
+            self._zoom_label = ui.label("100 %").classes("w-14 text-center text-sm")
+            self._zoom_in = (
+                ui.button(
+                    icon="add",
+                    on_click=lambda: self._set_zoom(self.zoom + self.ZOOM_STEP),
+                )
+                .props("dense round flat")
+                .mark("cropper-zoom-in")
+            )
+            (
+                ui.button(icon="restart_alt", on_click=lambda: self._set_zoom(self.MIN_ZOOM))
+                .props("dense round flat")
+                .mark("cropper-zoom-reset")
+                .tooltip("Ajustar a la vista")
+            )
+
+        # El borde enmarca el viewport (no la imagen): al ampliar, la imagen se
+        # desplaza por dentro con las barras de scroll.
+        self._viewport = (
+            ui.element("div")
+            .classes("w-full overflow-auto border border-gray-300 rounded")
+            .style("max-height: 75vh")
+        )
+        with self._viewport:
+            self._canvas = ui.element("div").style("width: 100%")
+            with self._canvas:
+                self.image = ui.interactive_image(
+                    source,
+                    on_mouse=self._on_mouse,
+                    events=["mousedown", "mousemove", "mouseup"],
+                    cross=True,
+                )
         self._refresh()
+        self._apply_zoom()
+
+    def _set_zoom(self, value: float) -> None:
+        """Fija el zoom al intervalo permitido; los controles usan este entry point."""
+        self.zoom = max(self.MIN_ZOOM, min(self.MAX_ZOOM, round(value, 2)))
+        self._apply_zoom()
+
+    def _apply_zoom(self) -> None:
+        """Aplica el zoom por ancho de *layout* y sincroniza los controles."""
+        self._canvas.style(f"width: {int(round(self.zoom * 100))}%")
+        self._zoom_label.set_text(f"{int(round(self.zoom * 100))} %")
+        self._zoom_out.set_enabled(self.zoom > self.MIN_ZOOM)
+        self._zoom_in.set_enabled(self.zoom < self.MAX_ZOOM)
 
     def _clamped(self, x: float, y: float) -> tuple[int, int]:
         return max(0, min(int(x), self.width)), max(0, min(int(y), self.height))

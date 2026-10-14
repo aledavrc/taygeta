@@ -192,8 +192,12 @@ class QuestionPanel:
             ui.expansion(
                 f"Pregunta {self.index + 1} — {staged.status}",
                 value=staged.status == STATUS_NEEDS_ATTENTION,
-            ),
+            ) as expansion,
         ):
+            # El editor usa ``autogrow`` y, con el panel plegado, Quasar mide su
+            # altura como una sola fila sin recalcularla al desplegarlo; hay que
+            # forzar el recálculo al abrir (ver ``_on_expansion_change``).
+            expansion.on_value_change(self._on_expansion_change)
             if staged.status == STATUS_VALID:
                 ui.label(
                     "Validación superada (VALID). Revísala y apruébala para guardarla."
@@ -366,6 +370,24 @@ class QuestionPanel:
             value = self.statement_area.value
         self._render_preview(value or "")
         self._sync_status()
+
+    def _on_expansion_change(self, e: Any) -> None:
+        """Reajusta la altura del editor al desplegar el panel de la pregunta.
+
+        El enunciado se edita en un ``ui.textarea`` con ``autogrow`` dentro de un
+        ``ui.expansion`` que arranca plegado. Quasar mide la altura del
+        ``autogrow`` al montar el componente; con el panel oculto la calcula como
+        una sola fila y no la recalcula al desplegarlo, de modo que el enunciado
+        queda recortado a su primera línea (con ``overflow`` oculto). Al abrir el
+        panel disparamos un evento ``input`` sobre el textarea para que Quasar
+        vuelva a medir su contenido.
+        """
+        if not getattr(e, "value", False) or self.statement_area is None:
+            return
+        ui.run_javascript(
+            f"const el = document.getElementById('{self.statement_area.html_id}');"
+            "if (el) el.dispatchEvent(new Event('input', { bubbles: true }));"
+        )
 
     def _on_course_change(self, e: Any) -> None:
         course = e.value or ""

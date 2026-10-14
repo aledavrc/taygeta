@@ -6,7 +6,9 @@ reruns.
 
 El panel contiene:
 
-* editor Markdown/TeX con previsualización enlazada (``ui.markdown``);
+* editor Markdown/TeX con previsualización enlazada que renderiza las fórmulas
+  con KaTeX (``ui.html`` + ``math_render``), no con ``ui.markdown`` (que no
+  soporta TeX y además lo destroza con markdown2);
 * tipo de pregunta y editor de alternativas (solo ``multiple_choice``);
 * taxonomía con comboboxes nativos de curso/tema (``ui.select`` con
   ``new_value_mode="add-unique"``: elegir del catálogo o escribir un slug
@@ -53,6 +55,7 @@ from taygeta.ui.nice.figures import (
     page_pil,
     replace_figure_crop,
 )
+from taygeta.ui.nice.math_render import MATH_CLASS, render_statement_html
 from taygeta.ui.nice.state import QuestionState, SessionState
 from taygeta.ui.shared import (
     cache_busted_public_url,
@@ -157,7 +160,7 @@ class QuestionPanel:
 
         # Referencias a los widgets (para confirmar y para reescribir tras un reanálisis).
         self.statement_area: ui.textarea | None = None
-        self.preview: ui.markdown | None = None
+        self.preview: ui.html | None = None
         self.qtype_select: ui.select | None = None
         self.choices_area: ui.column | None = None
         self.choice_editors: list[tuple[ui.input, ui.textarea]] = []
@@ -204,13 +207,13 @@ class QuestionPanel:
             if base is None:
                 ui.label("No hay enunciado estructurado para editar en esta pregunta.")
                 return
-            # Sistema de dos columnas: a la izquierda el texto reconocido, la
-            # vista formateada y los metadatos; a la derecha las figuras y la
-            # página original en pestañas. Se usa un grid (no un row) porque
-            # ``ui.row`` es ``flex-wrap: wrap`` y las columnas con gap se
-            # apilarían al superar el 100% de ancho.
+            # Sistema de dos columnas 40 % / 60 %: a la izquierda el texto
+            # reconocido, la vista formateada y los metadatos (2/5); a la derecha
+            # las figuras y la página original (3/5), que necesitan más espacio.
+            # Se usa un grid (no un row) porque ``ui.row`` es ``flex-wrap: wrap``
+            # y las columnas con gap se apilarían al superar el 100% de ancho.
             with ui.grid().classes("w-full gap-4 grid-cols-1 lg:grid-cols-5 items-start"):
-                with ui.column().classes("col-span-1 lg:col-span-3 gap-3 min-w-0"):
+                with ui.column().classes("col-span-1 lg:col-span-2 gap-3 min-w-0"):
                     self._build_editor()
                     self._build_taxonomy()
                     self._build_advanced()
@@ -220,7 +223,7 @@ class QuestionPanel:
                         "Aprobar y guardar esta pregunta", value=staged.status == STATUS_VALID
                     )
                     self._sync_status()
-                with ui.column().classes("col-span-1 lg:col-span-2 gap-3 min-w-0"):
+                with ui.column().classes("col-span-1 lg:col-span-3 gap-3 min-w-0"):
                     with ui.tabs(
                         value="Página original",
                         on_change=lambda e: self._set_view(e.value),
@@ -238,7 +241,9 @@ class QuestionPanel:
             "Enunciado (Markdown/TeX)", value=base.statement_raw
         ).classes("w-full")
         self.statement_area.props("outlined autogrow")
-        self.preview = ui.markdown(base.statement_raw).classes("w-full border rounded p-2")
+        self.preview = ui.html(render_statement_html(base.statement_raw)).classes(
+            f"w-full border rounded p-2 {MATH_CLASS}"
+        )
         self.statement_area.on_value_change(self._on_statement_change)
 
         self.qtype_select = ui.select(
@@ -350,12 +355,16 @@ class QuestionPanel:
     # Eventos del editor y taxonomía
     # ------------------------------------------------------------------
 
+    def _render_preview(self, statement: str) -> None:
+        """Re-renderiza la previsualización del enunciado (Markdown + TeX/KaTeX)."""
+        if self.preview is not None:
+            self.preview.set_content(render_statement_html(statement or ""))
+
     def _on_statement_change(self, e: Any) -> None:
         value = getattr(e, "value", None)
         if value is None and self.statement_area is not None:
             value = self.statement_area.value
-        if self.preview is not None:
-            self.preview.set_content(value or "")
+        self._render_preview(value or "")
         self._sync_status()
 
     def _on_course_change(self, e: Any) -> None:
@@ -580,8 +589,7 @@ class QuestionPanel:
                 return
             self.qstate.figures = figures
             self.statement_area.value = statement
-            if self.preview is not None:
-                self.preview.set_content(statement)
+            self._render_preview(statement)
             self._sync_status()
             ui.notify(
                 f"{figure_id} añadida; su placeholder quedó al final del enunciado.",
@@ -609,8 +617,7 @@ class QuestionPanel:
                 figure.get("asset_path"),
             )
         self.statement_area.value = statement
-        if self.preview is not None:
-            self.preview.set_content(statement)
+        self._render_preview(statement)
         self._sync_status()
         self._render_figures()
 
@@ -678,8 +685,7 @@ class QuestionPanel:
         ]
         if self.statement_area is not None:
             self.statement_area.value = question.statement_raw
-        if self.preview is not None:
-            self.preview.set_content(question.statement_raw)
+        self._render_preview(question.statement_raw)
         if self.qtype_select is not None:
             self.qtype_select.value = question.question_type
         self._rebuild_choices()

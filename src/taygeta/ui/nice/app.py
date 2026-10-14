@@ -40,6 +40,7 @@ from taygeta.ingest.pipeline import IngestPipeline
 from taygeta.server.db import Database, DatabaseError
 from taygeta.server.object_storage import ObjectStorage
 from taygeta.ui.nice import caption
+from taygeta.ui.nice.math_render import install_math_rendering
 from taygeta.ui.nice.question_panel import PanelDraft, QuestionPanel
 from taygeta.ui.nice.state import QuestionState, SessionState, drop, register
 from taygeta.ui.shared import (
@@ -321,9 +322,13 @@ def _index_page() -> None:
     settings, database, storage, pipeline = _resources()
     session = register(ui.context.client.id)
     ui.page_title("Taygeta — Revisión HITL")
+    # Carga KaTeX (recuadro de formato del enunciado) en el <head> de la página.
+    install_math_rendering()
     _dark_mode_toggle()
 
-    with ui.column().classes("w-full max-w-7xl mx-auto gap-2 p-4"):
+    # Contenedor amplio: en pantallas anchas se aprovecha el espacio disponible
+    # (hasta 1800 px) con poco margen lateral, en lugar del antiguo max-w-7xl.
+    with ui.column().classes("w-full max-w-[1800px] mx-auto gap-2 px-2 py-4"):
         ui.label("Taygeta — Ingesta y revisión Human-in-the-Loop").classes("text-2xl font-bold")
 
         # --- Estado y taxonomía ----------------------------------------

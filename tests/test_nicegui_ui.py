@@ -25,6 +25,7 @@ from taygeta.core.settings import get_settings
 from taygeta.ingest.pipeline import StagedQuestion
 from taygeta.ingest.validator import STATUS_NEEDS_ATTENTION, STATUS_VALID
 from taygeta.server.db import Database
+from taygeta.ui.nice.math_render import MATH_CLASS
 from taygeta.ui.nice.question_panel import QuestionPanel
 from taygeta.ui.nice.state import QuestionState, SessionState
 
@@ -367,3 +368,44 @@ async def test_cropper_zoom_controls(ui_env: None, tmp_path: Path) -> None:
         # Alejar por debajo del mínimo no baja del 100 % (el clamp lo impide).
         user.find("cropper-zoom-out").click()
         await user.should_see("100 %")
+
+
+async def test_statement_preview_renders_math(ui_env: None) -> None:
+    """El recuadro de formato es ``ui.html`` + KaTeX y conserva las fórmulas.
+
+    Antes usaba ``ui.markdown``: markdown2 destrozaba el TeX (``$x^2$`` →
+    ``$x<em>2</em>$``) y no había ningún motor que lo renderizara.
+    """
+    from nicegui.testing import user_simulation
+
+    settings = get_settings()
+    database = Database(settings=settings)
+    staged = _make_questions()
+
+    def root() -> None:
+        session = SessionState()
+        session.questions = {index: QuestionState() for index in range(len(staged))}
+        QuestionPanel(
+            ui.column().classes("w-full"),
+            index=0,
+            staged=staged[0],
+            session=session,
+            source_path=None,
+            storage=_StubStorage(),
+            settings=settings,
+            database=database,
+            pipeline=None,
+        )
+
+    async with user_simulation(root=root) as user:
+        await user.open("/")
+        previews = [
+            element for element in user.find(ui.html).elements if MATH_CLASS in element.classes
+        ]
+        assert len(previews) == 1
+        content = previews[0].content
+        # La fórmula llega intacta (sin el énfasis que introducía markdown2).
+        assert "$x^2 - 1 = 0$" in content
+        assert "<em>" not in content
+        # El placeholder de figura se mantiene como texto.
+        assert "{{fig:1}}" in content

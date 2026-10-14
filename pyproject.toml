@@ -25,6 +25,9 @@ dependencies = [
     "tylax>=0.3.8,<1",
     # UI HITL (revisión y recorte manual de figuras) sobre FastAPI.
     "nicegui>=3.18.0",
+    # Renderizado del enunciado en la UI: markdown2 (el que usa NiceGUI) con
+    # protección de las fórmulas TeX antes de renderizar (ver ui/nice/math_render.py).
+    "markdown2>=2.5.0",
 ]
 
 [project.scripts]

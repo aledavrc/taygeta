@@ -24,19 +24,19 @@ __all__ = ["TranslationOutcome", "TranslationService"]
 
 @dataclass(slots=True)
 class TranslationOutcome:
-    """Resultado de traducir y almacenar las copias de una pregunta."""
+    """Outcome of translating and storing the copies of a question."""
 
     stored: list[str] = field(default_factory=list)
     problems: list[str] = field(default_factory=list)
 
 
 class TranslationService:
-    """Traduce, valida y almacena las copias localizadas de una pregunta.
+    """Translates, validates and stores the localized copies of a question.
 
-    Cada copia pasa la heurística local (:func:`validate_translation`) y, si se
-    inyecta un ``semantic`` validador, también la capa semántica remota (que
-    verifica, entre otras cosas, que no se hayan añadido soluciones). Una copia
-    que no supere la validación se descarta y se reporta; nunca se almacena.
+    Each copy goes through the local heuristic (:func:`validate_translation`)
+    and, when a ``semantic`` validator is injected, also the remote semantic
+    layer (which checks, among other things, that no solutions were added). A
+    copy that fails validation is dropped and reported; it is never stored.
     """
 
     def __init__(
@@ -54,15 +54,15 @@ class TranslationService:
         outcome = TranslationOutcome()
         try:
             translations = self.translator.translate(question)
-        except Exception as exc:  # noqa: BLE001 - la traducción es complementaria
-            logger.warning("no se pudo traducir la pregunta %s: %s", question.id, exc)
-            outcome.problems.append(f"{question.id}: no se pudo traducir ({exc})")
+        except Exception as exc:  # noqa: BLE001 - translation is complementary
+            logger.warning("could not translate question %s: %s", question.id, exc)
+            outcome.problems.append(f"{question.id}: could not translate ({exc})")
             return outcome
         for translation in translations:
             result = validate_translation(question, translation)
             if not result.is_valid:
                 logger.warning(
-                    "la traducción %s de %s no superó la validación: %s",
+                    "translation %s of %s did not pass validation: %s",
                     translation.locale,
                     question.id,
                     result.format_reasons(),
@@ -73,27 +73,27 @@ class TranslationService:
                 continue
             if not self._semantic_ok(question, translation):
                 logger.warning(
-                    "la traducción %s de %s no superó la validación semántica",
+                    "translation %s of %s did not pass semantic validation",
                     translation.locale,
                     question.id,
                 )
                 outcome.problems.append(
-                    f"{question.id} [{translation.locale}]: no superó la validación semántica"
+                    f"{question.id} [{translation.locale}]: did not pass semantic validation"
                 )
                 continue
             try:
                 self.database.upsert_question_translation(translation)
-            except Exception as exc:  # noqa: BLE001 - se informa, no se oculta
+            except Exception as exc:  # noqa: BLE001 - reported, never hidden
                 outcome.problems.append(f"{question.id} [{translation.locale}]: {exc}")
                 continue
             outcome.stored.append(translation.locale)
         return outcome
 
     def _semantic_ok(self, question: EnrichedQuestion, translation: Any) -> bool:
-        """Comprueba la copia con la capa semántica, si está inyectada.
+        """Checks the copy with the semantic layer, if one is injected.
 
-        Un fallo del proveedor se trata como no verificable y descarta la copia,
-        de modo que nunca se almacena una traducción sin validar.
+        A provider failure is treated as unverifiable and drops the copy, so an
+        unvalidated translation is never stored.
         """
         if self.semantic is None:
             return True
@@ -105,7 +105,7 @@ class TranslationService:
         )
         try:
             logical = self.semantic.validate(candidate)
-        except Exception as exc:  # noqa: BLE001 - capa remota opcional
-            logger.warning("validación semántica no disponible: %s", exc)
+        except Exception as exc:  # noqa: BLE001 - optional remote layer
+            logger.warning("semantic validation unavailable: %s", exc)
             return False
         return bool(logical.is_valid)

@@ -196,7 +196,7 @@ def test_service_reports_provider_failure(database: Database) -> None:
 
     outcome = TranslationService(database, _Broken()).store(question)
     assert outcome.stored == []
-    assert outcome.problems == [f"{question.id}: no se pudo traducir (sin proveedor)"]
+    assert outcome.problems == [f"{question.id}: could not translate (sin proveedor)"]
 
 
 def test_service_rejects_copies_that_fail_semantic_validation(database: Database) -> None:
@@ -217,7 +217,7 @@ def test_service_rejects_copies_that_fail_semantic_validation(database: Database
     )
     outcome = service.store(question)
     assert outcome.stored == []
-    assert "semántica" in outcome.problems[0]
+    assert "semantic validation" in outcome.problems[0]
     assert database.get_question_translation(question.id, "en") is None
 
 

@@ -1,19 +1,20 @@
-"""Generación de exámenes de práctica (RAG, Typst, ZIP) — sección 9.3.
+"""Practice exam generation (RAG, Typst, ZIP) — section 9.3.
 
-Responsabilidades:
+Responsibilities:
 
-* ``retrieve_questions``: recupera ejercicios reales por curso/tema/dificultad
-  usando consultas parametrizadas de SQLite (FTS5 + filtros).
-* ``build_exam_typst`` / ``build_exam_latex``: ensamblan la plantilla a partir de
-  los enunciados (Markdown/TeX) mediante el transpilador.
-* ``copy_assets``: descarga desde SeaweedFS **solo** las figuras utilizadas y las
-  copia al directorio ``assets/`` del workspace de compilación.
-* ``generate_exam``: recupera, ensambla, copia assets y compila el PDF con el CLI
-  nativo de Typst; devuelve ``exam_id`` único, resumen y URL temporal.
-* ``build_source_zip``: empaqueta ``main.typ`` (o ``main.tex``), ``assets/`` y
-  ``README.txt`` en un ZIP para su descarga.
+* ``retrieve_questions``: retrieves real exercises by course/topic/difficulty
+  using parameterized SQLite queries (FTS5 + filters).
+* ``build_exam_typst`` / ``build_exam_latex``: assemble the template from the
+  statements (Markdown/TeX) through the transpiler.
+* ``copy_assets``: downloads from SeaweedFS **only** the figures that are used
+  and copies them into the ``assets/`` directory of the build workspace.
+* ``generate_exam``: retrieves, assembles, copies assets and compiles the PDF
+  with the native Typst CLI; returns a unique ``exam_id``, a summary and a
+  temporary URL.
+* ``build_source_zip``: packages ``main.typ`` (or ``main.tex``), ``assets/`` and
+  ``README.txt`` into a ZIP for download.
 
-No se generan ni incluyen soluciones o respuestas correctas.
+No solutions or correct answers are generated or included.
 """
 
 from __future__ import annotations
@@ -47,7 +48,7 @@ _HEX_CHARS = frozenset("0123456789abcdef")
 
 
 class ExamGenerationError(RuntimeError):
-    """Error controlado de la generación o empaquetado de exámenes."""
+    """Controlled error of exam generation or packaging."""
 
 
 def _is_valid_exam_id(exam_id: str) -> bool:
@@ -56,7 +57,7 @@ def _is_valid_exam_id(exam_id: str) -> bool:
 
 @dataclass(slots=True)
 class ExamResult:
-    """Resultado de una generación de examen."""
+    """Result of an exam generation."""
 
     exam_id: str
     status: str
@@ -76,7 +77,7 @@ class ExamResult:
 
 
 class ExamGenerator:
-    """Motor de generación y empaquetado de exámenes de práctica."""
+    """Practice exam generation and packaging engine."""
 
     def __init__(
         self,
@@ -89,7 +90,7 @@ class ExamGenerator:
         self.database = database or Database(settings=self.settings)
         self.storage = storage or ObjectStorage(self.settings)
 
-    # -- Recuperación (RAG) -------------------------------------------------
+    # -- Retrieval (RAG) ----------------------------------------------------
     def retrieve_questions(
         self,
         *,
@@ -98,10 +99,10 @@ class ExamGenerator:
         difficulty: int | None = None,
         limit: int = 10,
     ) -> list[EnrichedQuestion]:
-        """Recupera preguntas filtradas por curso, temas y dificultad.
+        """Retrieves questions filtered by course, topics and difficulty.
 
-        Usa consultas parametrizadas de ``Database`` y un límite acotado. No
-        devuelve soluciones ni respuestas correctas.
+        Uses parameterized ``Database`` queries and a bounded limit. It does not
+        return solutions or correct answers.
         """
         limit = max(1, min(limit, 100))
         if topics:
@@ -114,29 +115,30 @@ class ExamGenerator:
             return list(seen.values())[:limit]
         return self.database.list_questions(course=course, difficulty=difficulty, limit=limit)
 
-    # -- Nombrado local de figuras ------------------------------------------
+    # -- Local figure naming ------------------------------------------------
     @staticmethod
     def local_asset_name(figure: FigureReference) -> str:
-        """Nombre de archivo local y seguro para una figura (relativo a ``assets/``)."""
+        """Safe local file name for a figure (relative to ``assets/``)."""
         suffix = Path(figure.asset_path or "").suffix or ".png"
         if not suffix.startswith("."):
             suffix = "." + suffix
         return figure.id.replace(":", "_") + suffix
 
     def figure_paths_map(self, questions: Sequence[EnrichedQuestion]) -> dict[str, str]:
-        """Mapea ``fig:id`` → nombre de asset local para el transpilador."""
+        """Maps ``fig:id`` → local asset name for the transpiler."""
         mapping: dict[str, str] = {}
         for question in questions:
             for figure in question.figures:
                 mapping[figure.id] = self.local_asset_name(figure)
         return mapping
 
-    # -- Localización -------------------------------------------------------
+    # -- Localization -------------------------------------------------------
     def localized_statement(self, question: EnrichedQuestion, locale: str | None) -> str:
-        """Enunciado en ``locale`` si hay copia traducida validada; si no, el original.
+        """Statement in ``locale`` if a validated translated copy exists; otherwise the original.
 
-        El enunciado canónico vive en ``questions`` y es el único que participa en
-        la deduplicación; aquí solo se elige la variante de presentación.
+        The canonical statement lives in ``questions`` and is the only one that
+        takes part in deduplication; here only the presentation variant is
+        chosen.
         """
         if locale:
             translation = self.database.get_question_translation(question.id, locale)
@@ -144,7 +146,7 @@ class ExamGenerator:
                 return translation.statement_raw
         return question.statement_raw
 
-    # -- Plantillas ---------------------------------------------------------
+    # -- Templates ----------------------------------------------------------
     def build_exam_typst(
         self,
         questions: Sequence[EnrichedQuestion],
@@ -153,7 +155,7 @@ class ExamGenerator:
         figure_paths: Mapping[str, str] | None = None,
         locale: str | None = None,
     ) -> str:
-        """Ensambla la fuente Typst del examen a partir de los enunciados."""
+        """Assembles the Typst source of the exam from the statements."""
         paths = dict(figure_paths or self.figure_paths_map(questions))
         lines = [f"= {title}", ""]
         for index, question in enumerate(questions, start=1):
@@ -171,7 +173,7 @@ class ExamGenerator:
         figure_paths: Mapping[str, str] | None = None,
         locale: str | None = None,
     ) -> str:
-        """Ensambla la fuente LaTeX del examen usando ``\\includegraphics``."""
+        """Assembles the LaTeX source of the exam using ``\\includegraphics``."""
         paths = dict(figure_paths or self.figure_paths_map(questions))
         lines = [
             "\\documentclass{article}",
@@ -194,10 +196,10 @@ class ExamGenerator:
     def copy_assets(
         self, questions: Sequence[EnrichedQuestion], assets_dir: str | Path
     ) -> dict[str, str]:
-        """Descarga desde SeaweedFS las figuras utilizadas a ``assets_dir``.
+        """Downloads the used figures from SeaweedFS to ``assets_dir``.
 
-        Solo copia las figuras referenciadas por los enunciados; no guarda una
-        segunda copia local permanente.
+        Only copies the figures referenced by the statements; it does not keep a
+        second permanent local copy.
         """
         directory = Path(assets_dir)
         directory.mkdir(parents=True, exist_ok=True)
@@ -217,7 +219,7 @@ class ExamGenerator:
                 self.storage.download_to_file(key, destination, bucket=bucket)
         return mapping
 
-    # -- Generación ---------------------------------------------------------
+    # -- Generation ---------------------------------------------------------
     def generate_exam(
         self,
         *,
@@ -230,11 +232,11 @@ class ExamGenerator:
         downloads_dir: str | Path | None = None,
         locale: str | None = None,
     ) -> ExamResult:
-        """Genera y compila un examen de práctica completo.
+        """Generates and compiles a complete practice exam.
 
-        ``locale`` selecciona, cuando existe, la copia traducida del enunciado y
-        el nombre de curso localizado; si falta, se usa el enunciado canónico.
-        Informa explícitamente si no se recuperaron suficientes preguntas.
+        ``locale`` selects, when available, the translated copy of the statement
+        and the localized course name; if missing, the canonical statement is
+        used. It reports explicitly when not enough questions were retrieved.
         """
         downloads = Path(downloads_dir or self.settings.DOWNLOADS_DIR)
         exams_dir = downloads / "exams"
@@ -248,14 +250,14 @@ class ExamGenerator:
         if len(questions) < num_questions:
             status = "partial"
             warnings.append(
-                f"solo se encontraron {len(questions)} de las {num_questions} preguntas solicitadas"
+                f"only {len(questions)} of the {num_questions} requested questions were found"
             )
         if not questions:
             return ExamResult(exam_id or "", "error", 0, None, None, warnings)
 
         identifier = exam_id or uuid.uuid4().hex
         if not _is_valid_exam_id(identifier):
-            raise ExamGenerationError("exam_id inválido")
+            raise ExamGenerationError("invalid exam_id")
 
         source_dir = exams_dir / identifier
         assets_dir = source_dir / "assets"
@@ -288,10 +290,10 @@ class ExamGenerator:
             compile_result = transpiler.compile_typst(typst, source_dir, output_name="output.pdf")
         except transpiler.TranspileError as exc:
             logger.error(
-                "Error de conversión Markdown/TeX→Typst del examen %s: %s%s",
+                "Markdown/TeX→Typst conversion error for exam %s: %s%s",
                 identifier,
                 exc.message,
-                f" (fórmula original: {exc.original!r})" if exc.original else "",
+                f" (original formula: {exc.original!r})" if exc.original else "",
             )
             return ExamResult(
                 identifier,
@@ -299,11 +301,11 @@ class ExamGenerator:
                 len(questions),
                 None,
                 None,
-                [f"Error de conversión a Typst: {exc.message}"],
+                [f"Typst conversion error: {exc.message}"],
             )
         except (OSError, subprocess.SubprocessError) as exc:
             logger.error(
-                "No se pudo ejecutar pandoc/typst al generar el examen %s: %s",
+                "could not run pandoc/typst while generating exam %s: %s",
                 identifier,
                 exc,
             )
@@ -313,11 +315,11 @@ class ExamGenerator:
                 len(questions),
                 None,
                 None,
-                [f"Error de compilación Typst: {exc}"],
+                [f"Typst compilation error: {exc}"],
             )
         if not compile_result.ok:
             logger.error(
-                "Typst rechazó la fuente del examen %s:\n%s",
+                "Typst rejected the source of exam %s:\n%s",
                 identifier,
                 compile_result.format_errors(),
             )
@@ -336,7 +338,7 @@ class ExamGenerator:
         pdf_url = f"{self.settings.DOWNLOAD_PUBLIC_URL.rstrip('/')}/download/exams/{identifier}.pdf"
         return ExamResult(identifier, status, len(questions), pdf_path, pdf_url, warnings)
 
-    # -- Empaquetado de fuente ----------------------------------------------
+    # -- Source packaging ---------------------------------------------------
     def build_source_zip(
         self,
         exam_id: str,
@@ -344,20 +346,20 @@ class ExamGenerator:
         format: str = "typst",
         downloads_dir: str | Path | None = None,
     ) -> Path:
-        """Genera el ZIP con la fuente del examen (``main.typ``/``main.tex`` + assets).
+        """Generates the ZIP with the exam source (``main.typ``/``main.tex`` + assets).
 
-        Valida ``exam_id`` y ``format`` para impedir traversal o lectura arbitraria.
+        Validates ``exam_id`` and ``format`` to prevent traversal or arbitrary reads.
         """
         if format not in _ALLOWED_FORMATS:
-            raise ExamGenerationError(f"formato no soportado: {format!r}")
+            raise ExamGenerationError(f"unsupported format: {format!r}")
         if not _is_valid_exam_id(exam_id):
-            raise ExamGenerationError("exam_id inválido")
+            raise ExamGenerationError("invalid exam_id")
 
         downloads = Path(downloads_dir or self.settings.DOWNLOADS_DIR)
         source_dir = downloads / "exams" / exam_id
         manifest_path = source_dir / "manifest.json"
         if not manifest_path.is_file():
-            raise ExamGenerationError(f"no existe un examen con id {exam_id!r}")
+            raise ExamGenerationError(f"no exam exists with id {exam_id!r}")
 
         manifest = json.loads(manifest_path.read_text())
         zip_path = downloads / f"fuente_examen_{exam_id}.zip"

@@ -1,19 +1,19 @@
-"""Persistencia SQLite con búsqueda textual FTS5 para Taygeta.
+"""SQLite persistence with FTS5 full-text search for Taygeta.
 
-Este módulo implementa la base de datos descrita en la sección 6 de la
-especificación:
+This module implements the database described in section 6 of the
+specification:
 
-* ``questions`` con los campos exactos solicitados y ``payload_json`` con el
-  objeto :class:`~taygeta.core.schema.EnrichedQuestion` serializado.
-* ``questions_fts`` (virtual FTS5) sincronizada mediante triggers AFTER
-  INSERT/UPDATE/DELETE, de modo que la búsqueda textual nunca queda desfasada.
-* ``courses``, ``topics``, ``prerequisites`` y ``staging_sessions``.
+* ``questions`` with the exact requested fields and ``payload_json`` holding the
+  serialized :class:`~taygeta.core.schema.EnrichedQuestion` object.
+* ``questions_fts`` (FTS5 virtual) kept in sync through AFTER INSERT/UPDATE/DELETE
+  triggers, so that full-text search never becomes stale.
+* ``courses``, ``topics``, ``prerequisites`` and ``staging_sessions``.
 
-La base de datos vive en ``DB_PATH`` (por defecto ``/app/data/taygeta.db``), es
-decir, en el volumen persistente, nunca en la raíz del repositorio. La
-inicialización del esquema es idempotente y :meth:`Database.status` informa del
-estado real de la base de datos. No se almacenan soluciones ni respuestas
-correctas: el ``payload_json`` está validado por esquemas que las prohíben.
+The database lives in ``DB_PATH`` (by default ``/app/data/taygeta.db``), that is,
+in the persistent volume, never in the repository root. Schema initialization is
+idempotent and :meth:`Database.status` reports the real state of the database.
+Solutions and correct answers are not stored: ``payload_json`` is validated by
+schemas that forbid them.
 """
 
 from __future__ import annotations
@@ -45,19 +45,19 @@ __all__ = [
     "get_database",
 ]
 
-#: Versión lógica del esquema, registrada en ``schema_meta``.
+#: Logical schema version, recorded in ``schema_meta``.
 SCHEMA_VERSION = "3"
 
-#: Estados admitidos para una sesión de staging.
+#: Accepted statuses for a staging session.
 STAGING_STATUSES: tuple[str, ...] = ("VALID", "NEEDS_ATTENTION", "CONFIRMED", "DISCARDED")
 
-#: Límite máximo de resultados para proteger el servicio RAG.
+#: Maximum result limit to protect the RAG service.
 MAX_SEARCH_LIMIT = 100
 
-#: Fuentes de un label de taxonomía, de menor a mayor precedencia al escribir.
+#: Sources of a taxonomy label, from lowest to highest precedence on write.
 TAXONOMY_LABEL_SOURCES: tuple[str, ...] = ("llm", "seed", "manual")
 
-#: Precedencia numérica usada por el ``ON CONFLICT`` de ``taxonomy_labels``.
+#: Numeric precedence used by the ``ON CONFLICT`` of ``taxonomy_labels``.
 _SOURCE_RANK_SQL = (
     "CASE excluded.source WHEN 'manual' THEN 3 WHEN 'seed' THEN 2 ELSE 1 END >= "
     "CASE taxonomy_labels.source WHEN 'manual' THEN 3 WHEN 'seed' THEN 2 ELSE 1 END"
@@ -65,11 +65,11 @@ _SOURCE_RANK_SQL = (
 
 
 class DatabaseError(RuntimeError):
-    """Error controlado de acceso o integridad de la base de datos."""
+    """Controlled error of database access or integrity."""
 
 
-#: DDL de las tablas de taxonomía. Se reconstruyen al migrar desde el esquema
-#: anterior, en el que los nombres de curso vivían en ``courses.name``.
+#: DDL of the taxonomy tables. They are rebuilt when migrating from the previous
+#: schema, in which course names lived in ``courses.name``.
 _TAXONOMY_SQL = """
 CREATE TABLE IF NOT EXISTS courses (
     slug TEXT PRIMARY KEY
@@ -87,8 +87,8 @@ CREATE TABLE IF NOT EXISTS prerequisites (
     description TEXT
 );
 
--- Nombres legibles por idioma y tipo de taxonomía. Los slugs siguen siendo
--- datos estables; ``source`` ordena la precedencia manual > seed > llm.
+-- Human-readable names by locale and taxonomy kind. The slugs remain stable
+-- data; ``source`` orders the precedence manual > seed > llm.
 CREATE TABLE IF NOT EXISTS taxonomy_labels (
     kind        TEXT NOT NULL,
     parent_slug TEXT NOT NULL DEFAULT '',
@@ -104,7 +104,7 @@ CREATE INDEX IF NOT EXISTS idx_topics_course ON topics(course_slug);
 CREATE INDEX IF NOT EXISTS idx_taxonomy_labels_lookup
     ON taxonomy_labels(kind, parent_slug, slug);
 
--- El subtema puede ser NULL; COALESCE evita que varios NULL se consideren distintos.
+-- The subtopic may be NULL; COALESCE stops several NULLs from being treated as distinct.
 CREATE UNIQUE INDEX IF NOT EXISTS uq_topics_course_topic_subtopic
     ON topics(course_slug, topic_slug, COALESCE(subtopic_slug, ''));
 """
@@ -136,9 +136,9 @@ CREATE VIRTUAL TABLE IF NOT EXISTS questions_fts USING fts5(
     tokenize = 'unicode61 remove_diacritics 2'
 );
 
--- Copias traducidas por idioma. El enunciado canónico vive en ``questions``;
--- estas filas son derivadas, no entran en la deduplicación y se borran en
--- cascada con su pregunta.
+-- Translated copies by locale. The canonical statement lives in ``questions``;
+-- these rows are derived, do not take part in deduplication and are deleted in
+-- cascade with their question.
 CREATE TABLE IF NOT EXISTS question_translations (
     question_id  TEXT NOT NULL REFERENCES questions(id) ON DELETE CASCADE,
     locale       TEXT NOT NULL,
@@ -172,7 +172,7 @@ CREATE INDEX IF NOT EXISTS idx_questions_created_at ON questions(created_at);
 CREATE INDEX IF NOT EXISTS idx_staging_status ON staging_sessions(status);
 CREATE INDEX IF NOT EXISTS idx_staging_created_at ON staging_sessions(created_at);
 
--- Sincronización FTS5 con questions mediante triggers.
+-- FTS5 synchronization with questions through triggers.
 CREATE TRIGGER IF NOT EXISTS questions_ai AFTER INSERT ON questions BEGIN
     INSERT INTO questions_fts(id, statement_raw)
     VALUES (new.id, json_extract(new.payload_json, '$.statement_raw'));
@@ -188,7 +188,7 @@ CREATE TRIGGER IF NOT EXISTS questions_au AFTER UPDATE ON questions BEGIN
     VALUES (new.id, json_extract(new.payload_json, '$.statement_raw'));
 END;
 
--- Sincronización FTS5 de las traducciones mediante triggers.
+-- FTS5 synchronization of the translations through triggers.
 CREATE TRIGGER IF NOT EXISTS question_translations_ai AFTER INSERT ON question_translations BEGIN
     INSERT INTO question_translations_fts(question_id, locale, statement_raw)
     VALUES (new.question_id, new.locale, json_extract(new.payload_json, '$.statement_raw'));
@@ -210,20 +210,19 @@ END;
 
 
 def _build_match_query(query: str) -> str:
-    """Convierte una consulta libre en una expresión MATCH segura para FTS5.
+    """Turns a free query into a safe MATCH expression for FTS5.
 
-    Cada término se entrecomilla para evitar que la sintaxis de FTS5 (operadores
-    ``AND``/``OR``/``NEAR``, comillas, paréntesis, ``*``) provoque errores o
-    consultas inesperadas.
+    Each term is quoted so that FTS5 syntax (``AND``/``OR``/``NEAR`` operators,
+    quotes, parentheses, ``*``) cannot cause errors or unexpected queries.
     """
     tokens = query.split()
     if not tokens:
-        raise DatabaseError("la consulta de búsqueda no puede estar vacía")
+        raise DatabaseError("the search query cannot be empty")
     return " ".join('"' + token.replace('"', '""') + '"' for token in tokens)
 
 
 class Database:
-    """Acceso transaccional a la base de datos SQLite de Taygeta."""
+    """Transactional access to the Taygeta SQLite database."""
 
     def __init__(
         self,
@@ -232,14 +231,14 @@ class Database:
         settings: Settings | None = None,
         initialize: bool = True,
     ) -> None:
-        """Crea el acceso a la base de datos.
+        """Creates the database access.
 
         Args:
-            db_path: Ruta del archivo SQLite. Si se omite, se usa ``DB_PATH``
-                de la configuración.
-            settings: Configuración a usar; por defecto la global.
-            initialize: Si es ``True``, inicializa el esquema de forma
-                idempotente al construir la instancia.
+            db_path: Path of the SQLite file. If omitted, ``DB_PATH`` from the
+                configuration is used.
+            settings: Configuration to use; defaults to the global one.
+            initialize: If ``True``, initializes the schema idempotently when the
+                instance is built.
         """
         self.settings = settings or get_settings()
         resolved = db_path if db_path is not None else self.settings.database_path
@@ -249,10 +248,10 @@ class Database:
         if initialize:
             self.initialize()
 
-    # -- Conexión -----------------------------------------------------------
+    # -- Connection ---------------------------------------------------------
     @property
     def is_memory(self) -> bool:
-        """Indica si la base de datos reside en memoria."""
+        """Indicates whether the database resides in memory."""
         return self.db_path == ":memory:"
 
     def _new_connection(self) -> sqlite3.Connection:
@@ -264,7 +263,7 @@ class Database:
 
     @contextmanager
     def connect(self) -> Iterator[sqlite3.Connection]:
-        """Contexto transaccional que confirma al salir y revierte ante error."""
+        """Transactional context that commits on exit and rolls back on error."""
         if self.is_memory:
             if self._memory_connection is None:
                 self._memory_connection = self._new_connection()
@@ -287,12 +286,12 @@ class Database:
         finally:
             connection.close()
 
-    # -- Inicialización -----------------------------------------------------
+    # -- Initialization -----------------------------------------------------
     def initialize(self) -> None:
-        """Crea el esquema de forma idempotente (seguro de llamar varias veces).
+        """Creates the schema idempotently (safe to call several times).
 
         Raises:
-            DatabaseError: si la ruta no es accesible o el esquema no puede crearse.
+            DatabaseError: if the path is not accessible or the schema cannot be created.
         """
         try:
             if not self.is_memory:
@@ -310,7 +309,7 @@ class Database:
                 )
         except sqlite3.Error as exc:
             raise DatabaseError(
-                f"no se pudo inicializar la base de datos en {self.db_path!r}: {exc}"
+                f"could not initialize the database at {self.db_path!r}: {exc}"
             ) from exc
         self._fts5_enabled = self._check_fts5()
 
@@ -324,16 +323,16 @@ class Database:
 
     @staticmethod
     def _migrate_schema(connection: sqlite3.Connection) -> None:
-        """Aplica migraciones incrementales a bases de datos ya existentes.
+        """Applies incremental migrations to already-existing databases.
 
-        ``CREATE TABLE IF NOT EXISTS`` no altera tablas preexistentes, por lo que
-        las columnas añadidas en versiones posteriores del esquema se crean aquí
-        de forma idempotente (por ejemplo ``questions.embedding_json``).
+        ``CREATE TABLE IF NOT EXISTS`` does not alter pre-existing tables, so the
+        columns added in later versions of the schema are created here
+        idempotently (for example ``questions.embedding_json``).
 
-        Los nombres de curso dejaron de vivir en ``courses.name`` (ahora viven en
-        ``taxonomy_labels``); si se detecta el esquema anterior, las tablas de
-        taxonomía se reconstruyen desde cero. Los datos almacenados son
-        desechables, de modo que no se migran filas.
+        Course names stopped living in ``courses.name`` (they now live in
+        ``taxonomy_labels``); if the previous schema is detected, the taxonomy
+        tables are rebuilt from scratch. The stored data is disposable, so no
+        rows are migrated.
         """
         columns = {
             row["name"] for row in connection.execute("PRAGMA table_info(questions)").fetchall()
@@ -353,7 +352,7 @@ class Database:
             connection.executescript(_TAXONOMY_SQL)
 
     def _seed_taxonomy(self, connection: sqlite3.Connection) -> None:
-        """Siembra ``taxonomy_labels`` la primera vez (idempotente, no sobrescribe)."""
+        """Seeds ``taxonomy_labels`` the first time (idempotent, does not overwrite)."""
         row = connection.execute("SELECT count(*) AS c FROM taxonomy_labels").fetchone()
         if row is not None and int(row["c"]) > 0:
             return
@@ -368,7 +367,7 @@ class Database:
         )
 
     def rebuild_fts(self) -> int:
-        """Regenera las tablas FTS5 y devuelve el número de filas de preguntas."""
+        """Rebuilds the FTS5 tables and returns the number of question rows."""
         with self.connect() as connection:
             connection.execute("DELETE FROM questions_fts")
             connection.execute(
@@ -384,9 +383,9 @@ class Database:
             row = connection.execute("SELECT count(*) AS c FROM questions_fts").fetchone()
         return int(row["c"])
 
-    # -- Preguntas ----------------------------------------------------------
+    # -- Questions ----------------------------------------------------------
     def question_exists(self, question_id: str) -> bool:
-        """Comprueba si existe una pregunta con el identificador indicado."""
+        """Checks whether a question with the given identifier exists."""
         with self.connect() as connection:
             row = connection.execute(
                 "SELECT 1 FROM questions WHERE id = ? LIMIT 1", (question_id,)
@@ -396,15 +395,15 @@ class Database:
     def insert_question(
         self, question: EnrichedQuestion, *, embedding: Sequence[float] | None = None
     ) -> str:
-        """Inserta una pregunta nueva y devuelve el estado de la inserción.
+        """Inserts a new question and returns the insertion status.
 
-        En entorno ``local`` calcula el ``canonical_hash`` del enunciado y, si ya
-        existe una pregunta con el mismo hash en el mismo curso, bloquea la
-        inserción devolviendo ``"DUPLICATE"``. El ``embedding`` (opcional) se
-        almacena para la deduplicación semántica posterior.
+        In the ``local`` environment it computes the ``canonical_hash`` of the
+        statement and, if a question with the same hash already exists in the
+        same course, blocks the insertion by returning ``"DUPLICATE"``. The
+        ``embedding`` (optional) is stored for later semantic deduplication.
 
         Raises:
-            DatabaseError: si ya existe una pregunta con el mismo ``id``.
+            DatabaseError: if a question with the same ``id`` already exists.
         """
         if self.settings.APP_ENV == "local":
             question = question.model_copy(
@@ -429,19 +428,19 @@ class Database:
                     values,
                 )
             except sqlite3.IntegrityError as exc:
-                raise DatabaseError(f"ya existe una pregunta con id {question.id!r}") from exc
+                raise DatabaseError(f"a question with id {question.id!r} already exists") from exc
         return "INSERTED"
 
     def update_question(
         self, question: EnrichedQuestion, *, embedding: Sequence[float] | None = None
     ) -> None:
-        """Actualiza una pregunta existente y sincroniza FTS5.
+        """Updates an existing question and synchronizes FTS5.
 
-        Si ``embedding`` es ``None``, el embedding almacenado se conserva tal cual
-        (no se borra); para vaciarlo explícitamente pásese una lista vacía.
+        If ``embedding`` is ``None``, the stored embedding is kept as is (it is
+        not deleted); to empty it explicitly, pass an empty list.
 
         Raises:
-            DatabaseError: si la pregunta no existe.
+            DatabaseError: if the question does not exist.
         """
         values = self._question_values(question, embedding)
         with self.connect() as connection:
@@ -478,12 +477,12 @@ class Database:
                     ),
                 )
             if cursor.rowcount == 0:
-                raise DatabaseError(f"no existe una pregunta con id {question.id!r}")
+                raise DatabaseError(f"no question exists with id {question.id!r}")
 
     def upsert_question(
         self, question: EnrichedQuestion, *, embedding: Sequence[float] | None = None
     ) -> None:
-        """Inserta o reemplaza una pregunta manteniendo FTS5 coherente."""
+        """Inserts or replaces a question while keeping FTS5 coherent."""
         values = self._question_values(question, embedding)
         with self.connect() as connection:
             connection.execute("DELETE FROM questions WHERE id = ?", (question.id,))
@@ -495,7 +494,7 @@ class Database:
             )
 
     def get_question(self, question_id: str) -> EnrichedQuestion | None:
-        """Recupera una pregunta validada o ``None`` si no existe."""
+        """Retrieves a validated question or ``None`` if it does not exist."""
         from taygeta.core.schema import EnrichedQuestion
 
         with self.connect() as connection:
@@ -507,7 +506,7 @@ class Database:
         return EnrichedQuestion.model_validate_json(row["payload_json"])
 
     def delete_question(self, question_id: str) -> bool:
-        """Elimina una pregunta (y sus traducciones y filas FTS vía triggers)."""
+        """Deletes a question (and its translations and FTS rows via triggers)."""
         with self.connect() as connection:
             connection.execute(
                 "DELETE FROM question_translations WHERE question_id = ?", (question_id,)
@@ -516,13 +515,13 @@ class Database:
         return cursor.rowcount > 0
 
     def count_questions(self) -> int:
-        """Devuelve el número total de preguntas almacenadas."""
+        """Returns the total number of stored questions."""
         with self.connect() as connection:
             row = connection.execute("SELECT count(*) AS c FROM questions").fetchone()
         return int(row["c"])
 
     def list_question_ids(self) -> list[str]:
-        """Devuelve los identificadores de todas las preguntas, ordenados por id."""
+        """Returns the identifiers of all questions, ordered by id."""
         with self.connect() as connection:
             rows = connection.execute("SELECT id FROM questions ORDER BY id").fetchall()
         return [row["id"] for row in rows]
@@ -537,7 +536,7 @@ class Database:
         limit: int = 50,
         offset: int = 0,
     ) -> list[EnrichedQuestion]:
-        """Lista preguntas aplicando filtros curriculares (consultas parametrizadas)."""
+        """Lists questions applying curricular filters (parameterized queries)."""
         from taygeta.core.schema import EnrichedQuestion
 
         conditions: list[str] = []
@@ -576,10 +575,10 @@ class Database:
         limit: int = 20,
         offset: int = 0,
     ) -> list[EnrichedQuestion]:
-        """Recupera preguntas por texto (FTS5) y/o filtros curriculares.
+        """Retrieves questions by text (FTS5) and/or curricular filters.
 
-        Usa consultas parametrizadas y un límite acotado. Nunca devuelve
-        soluciones ni respuestas correctas.
+        Uses parameterized queries and a bounded limit. It never returns
+        solutions or correct answers.
         """
         from taygeta.core.schema import EnrichedQuestion
 
@@ -618,9 +617,9 @@ class Database:
             rows = connection.execute(sql, params).fetchall()
         return [EnrichedQuestion.model_validate_json(row["payload_json"]) for row in rows]
 
-    # -- Traducciones -------------------------------------------------------
+    # -- Translations -------------------------------------------------------
     def upsert_question_translation(self, translation: QuestionTranslation) -> None:
-        """Inserta o actualiza la copia traducida de una pregunta para un idioma."""
+        """Inserts or updates the translated copy of a question for a locale."""
         with self.connect() as connection:
             connection.execute(
                 "INSERT INTO question_translations"
@@ -639,7 +638,7 @@ class Database:
             )
 
     def get_question_translation(self, question_id: str, locale: str) -> QuestionTranslation | None:
-        """Recupera la copia traducida de una pregunta, o ``None`` si no existe."""
+        """Retrieves the translated copy of a question, or ``None`` if it does not exist."""
         with self.connect() as connection:
             row = connection.execute(
                 "SELECT payload_json FROM question_translations "
@@ -651,7 +650,7 @@ class Database:
         return QuestionTranslation.model_validate_json(row["payload_json"])
 
     def list_question_translations(self, question_id: str) -> list[QuestionTranslation]:
-        """Lista todas las copias traducidas almacenadas de una pregunta."""
+        """Lists all stored translated copies of a question."""
         with self.connect() as connection:
             rows = connection.execute(
                 "SELECT payload_json FROM question_translations "
@@ -661,7 +660,7 @@ class Database:
         return [QuestionTranslation.model_validate_json(row["payload_json"]) for row in rows]
 
     def delete_question_translations(self, question_id: str) -> int:
-        """Elimina todas las copias traducidas de una pregunta. Devuelve cuántas borró."""
+        """Deletes all translated copies of a question. Returns how many it deleted."""
         with self.connect() as connection:
             cursor = connection.execute(
                 "DELETE FROM question_translations WHERE question_id = ?", (question_id,)
@@ -671,7 +670,7 @@ class Database:
     def search_translation_ids(
         self, query: str, *, locale: str | None = None, limit: int = 20
     ) -> list[str]:
-        """Ids de preguntas cuyo enunciado traducido coincide con ``query`` (FTS5)."""
+        """Ids of questions whose translated statement matches ``query`` (FTS5)."""
         conditions = ["question_translations_fts MATCH ?"]
         params: list[Any] = [_build_match_query(query)]
         if locale is not None:
@@ -687,14 +686,14 @@ class Database:
             rows = connection.execute(sql, params).fetchall()
         return [row["question_id"] for row in rows]
 
-    # -- Taxonomía ----------------------------------------------------------
+    # -- Taxonomy -----------------------------------------------------------
     def upsert_course(self, slug: str) -> None:
-        """Registra un curso en el catálogo (los nombres viven en ``taxonomy_labels``)."""
+        """Registers a course in the catalog (the names live in ``taxonomy_labels``)."""
         with self.connect() as connection:
             connection.execute("INSERT OR IGNORE INTO courses(slug) VALUES (?)", (slug,))
 
     def get_course_name(self, slug: str, *, locale: str = DEFAULT_LOCALE) -> str | None:
-        """Devuelve el nombre localizado de un curso, o ``None`` si no está etiquetado."""
+        """Returns the localized name of a course, or ``None`` if it is not labeled."""
         return self.get_taxonomy_label("course", slug, locale=locale)
 
     def get_taxonomy_label(
@@ -705,7 +704,7 @@ class Database:
         parent_slug: str = "",
         locale: str = DEFAULT_LOCALE,
     ) -> str | None:
-        """Devuelve el label de taxonomía para ``locale``, o ``None`` si no existe."""
+        """Returns the taxonomy label for ``locale``, or ``None`` if it does not exist."""
         with self.connect() as connection:
             row = connection.execute(
                 "SELECT label FROM taxonomy_labels "
@@ -724,7 +723,7 @@ class Database:
         parent_slug: str = "",
         source: str = "manual",
     ) -> None:
-        """Inserta un label sin pisar una fuente de mayor precedencia (manual > seed > llm)."""
+        """Inserts a label without overwriting a higher-precedence source (manual > seed > llm)."""
         with self.connect() as connection:
             connection.execute(
                 "INSERT INTO taxonomy_labels"
@@ -737,7 +736,7 @@ class Database:
             )
 
     def taxonomy_label_map(self, *, locale: str) -> dict[tuple[str, str, str], str]:
-        """Mapa ``(kind, parent_slug, slug) -> label`` para ``locale`` (para cachés)."""
+        """``(kind, parent_slug, slug) -> label`` map for ``locale`` (for caches)."""
         with self.connect() as connection:
             rows = connection.execute(
                 "SELECT kind, parent_slug, slug, label FROM taxonomy_labels WHERE locale = ?",
@@ -746,11 +745,11 @@ class Database:
         return {(row["kind"], row["parent_slug"], row["slug"]): row["label"] for row in rows}
 
     def upsert_taxonomy_names(self, names: Iterable[TaxonomyNames], *, source: str = "llm") -> int:
-        """Persiste nombres localizados (es/en) generados por el LLM.
+        """Persists localized names (es/en) generated by the LLM.
 
-        Escribe cada idioma como un label independiente respetando la precedencia
-        (manual > seed > llm), de modo que un nombre generado nunca pisa uno
-        sembrado o editado a mano. Devuelve cuántas filas se intentaron escribir.
+        Writes each locale as an independent label respecting precedence
+        (manual > seed > llm), so a generated name never overwrites a seeded or
+        hand-edited one. Returns how many rows were attempted to be written.
         """
         written = 0
         for entry in names:
@@ -772,7 +771,7 @@ class Database:
         topic_slug: str,
         subtopic_slug: str | None = None,
     ) -> int:
-        """Inserta si falta y devuelve el identificador del tema/subtema."""
+        """Inserts if missing and returns the topic/subtopic identifier."""
         with self.connect() as connection:
             row = connection.execute(
                 "SELECT id FROM topics WHERE course_slug = ? AND topic_slug = ? "
@@ -788,12 +787,12 @@ class Database:
                 )
             except sqlite3.IntegrityError as exc:
                 raise DatabaseError(
-                    f"no se pudo crear el tema {topic_slug!r}: el curso {course_slug!r} no existe"
+                    f"could not create topic {topic_slug!r}: course {course_slug!r} does not exist"
                 ) from exc
             return int(cursor.lastrowid or 0)
 
     def upsert_prerequisite(self, slug: str, description: str | None = None) -> None:
-        """Inserta o actualiza un prerrequisito del catálogo."""
+        """Inserts or updates a prerequisite of the catalog."""
         with self.connect() as connection:
             connection.execute(
                 "INSERT INTO prerequisites(slug, description) VALUES (?, ?) "
@@ -803,7 +802,7 @@ class Database:
             )
 
     def add_prerequisites(self, slugs: list[str]) -> list[str]:
-        """Añade dinámicamente nuevos tags de prerrequisitos al catálogo."""
+        """Dynamically adds new prerequisite tags to the catalog."""
         slugs = list(dict.fromkeys(slug for slug in slugs if slug))
         with self.connect() as connection:
             connection.executemany(
@@ -841,13 +840,13 @@ class Database:
         return [dict(row) for row in rows]
 
     def list_taxonomy(self, *, locale: str | None = None) -> dict[str, Any]:
-        """Catálogo de taxonomía, con nombres localizados.
+        """Taxonomy catalog, with localized names.
 
-        Por defecto cada entrada incluye un mapa ``names`` (``{locale: label}``)
-        con todos los idiomas soportados; los temas y subtemas se resuelven en el
-        contexto de su curso (``parent_slug``). Con ``locale`` se devuelve una
-        forma plana y limpia con un único ``name`` por entrada. Los labels
-        proceden de ``taxonomy_labels`` y caen a ``title_case_slug``.
+        By default each entry includes a ``names`` map (``{locale: label}``) with
+        all supported locales; topics and subtopics are resolved in the context of
+        their course (``parent_slug``). With ``locale`` a flat, clean shape is
+        returned with a single ``name`` per entry. Labels come from
+        ``taxonomy_labels`` and fall back to ``title_case_slug``.
         """
         labels = self._label_map()
         with self.connect() as connection:
@@ -945,13 +944,13 @@ class Database:
         }
 
     def get_live_taxonomy_tree(self) -> dict[str, dict[str, list[str]]]:
-        """Devuelve la taxonomía curricular viva de la base de datos.
+        """Returns the live curricular taxonomy of the database.
 
-        Reconstruye la jerarquía ``curso -> tema -> subtemas`` realmente en uso a
-        partir de las preguntas ya confirmadas. Solo se incluyen cursos y temas
-        presentes en la tabla ``questions``, de modo que el LLM pueda reutilizar
-        los slugs existentes en lugar de inventar variantes. El diccionario no
-        almacena soluciones ni respuestas correctas: únicamente slugs curriculares.
+        Rebuilds the ``course -> topic -> subtopics`` hierarchy actually in use
+        from the already-confirmed questions. Only courses and topics present in
+        the ``questions`` table are included, so the LLM can reuse existing slugs
+        instead of inventing variants. The dictionary does not store solutions or
+        correct answers: only curricular slugs.
         """
         tree: dict[str, dict[str, list[str]]] = {}
         with self.connect() as connection:
@@ -969,9 +968,9 @@ class Database:
                 subtopics.append(subtopic)
         return tree
 
-    # -- Deduplicación semántica -------------------------------------------
+    # -- Semantic deduplication ---------------------------------------------
     def get_embedding(self, question_id: str) -> list[float] | None:
-        """Devuelve el embedding almacenado de una pregunta, o ``None`` si no tiene."""
+        """Returns the stored embedding of a question, or ``None`` if it has none."""
         with self.connect() as connection:
             row = connection.execute(
                 "SELECT embedding_json FROM questions WHERE id = ?", (question_id,)
@@ -981,10 +980,10 @@ class Database:
         return decode_embedding(row["embedding_json"])
 
     def list_embeddings(self, *, course: str | None = None) -> list[tuple[str, list[float]]]:
-        """Lista ``(id, embedding)`` de las preguntas que ya tienen vector.
+        """Lists ``(id, embedding)`` of the questions that already have a vector.
 
-        Se usa para calcular la similitud coseno en memoria (el volumen actual es
-        bajo). Si se indica ``course``, se restringe a ese curso.
+        It is used to compute cosine similarity in memory (the current volume is
+        low). If ``course`` is given, it is restricted to that course.
         """
         if course is not None:
             sql = (
@@ -1015,10 +1014,10 @@ class Database:
         course: str | None = None,
         limit: int = 5,
     ) -> list[tuple[str, float]]:
-        """Devuelve las preguntas con similitud coseno >= ``threshold``.
+        """Returns the questions with cosine similarity >= ``threshold``.
 
-        Ordena por similitud descendente y acota a ``limit`` resultados. Compara
-        solo contra preguntas que ya tienen embedding almacenado.
+        Sorts by descending similarity and bounds to ``limit`` results. It
+        compares only against questions that already have a stored embedding.
         """
         matches: list[tuple[str, float]] = []
         for question_id, vector in self.list_embeddings(course=course):
@@ -1036,7 +1035,7 @@ class Database:
         status: str = "NEEDS_ATTENTION",
         session_id: str | None = None,
     ) -> str:
-        """Crea una sesión de staging y devuelve su identificador."""
+        """Creates a staging session and returns its identifier."""
         self._validate_status(status)
         sid = session_id or uuid.uuid4().hex
         data_json = data if isinstance(data, str) else json.dumps(data, ensure_ascii=False)
@@ -1068,9 +1067,9 @@ class Database:
         data: dict[str, Any] | list[Any] | str | None = None,
         status: str | None = None,
     ) -> bool:
-        """Actualiza los datos y/o el estado de una sesión de staging."""
+        """Updates the data and/or the status of a staging session."""
         if data is None and status is None:
-            raise DatabaseError("no se indicó ningún cambio para la sesión de staging")
+            raise DatabaseError("no change was given for the staging session")
         if status is not None:
             self._validate_status(status)
 
@@ -1113,9 +1112,9 @@ class Database:
                 ).fetchall()
         return [dict(row) for row in rows]
 
-    # -- Estado -------------------------------------------------------------
+    # -- State --------------------------------------------------------------
     def status(self) -> dict[str, Any]:
-        """Devuelve un resumen verificable del estado de la base de datos."""
+        """Returns a verifiable summary of the database state."""
         with self.connect() as connection:
             tables = [
                 row["name"]
@@ -1142,7 +1141,7 @@ class Database:
             "counts": counts,
         }
 
-    # -- Utilidades internas ------------------------------------------------
+    # -- Internal utilities -------------------------------------------------
     @staticmethod
     def _clamp_limit(limit: int) -> int:
         if limit < 1:
@@ -1152,9 +1151,7 @@ class Database:
     @staticmethod
     def _validate_status(status: str) -> None:
         if status not in STAGING_STATUSES:
-            raise DatabaseError(
-                f"estado de staging inválido {status!r}; use uno de {STAGING_STATUSES}"
-            )
+            raise DatabaseError(f"invalid staging status {status!r}; use one of {STAGING_STATUSES}")
 
     @staticmethod
     def _question_values(
@@ -1174,8 +1171,8 @@ class Database:
 
 
 def get_database() -> Database:
-    """Devuelve una instancia de :class:`Database` sobre la ruta efectiva.
+    """Returns a :class:`Database` instance over the effective path.
 
-    Usa ``DATABASE_URL`` si está configurada; en caso contrario ``DB_PATH``.
+    Uses ``DATABASE_URL`` if configured; otherwise ``DB_PATH``.
     """
     return Database(get_settings().database_path)

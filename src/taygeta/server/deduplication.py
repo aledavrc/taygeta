@@ -1,24 +1,24 @@
-"""Deduplicación semántica de preguntas por embeddings (filtro de ingesta).
+"""Semantic question deduplication by embeddings (ingestion filter).
 
-Flujo:
+Flow:
 
-1. Al ingerir una pregunta se genera su embedding con el modelo configurado
+1. On ingesting a question, its embedding is generated with the configured model
    (:class:`~taygeta.agents.embeddings.Embedder`).
-2. Se compara (similitud coseno) contra los embeddings ya almacenados en la base
-   de datos, restringido al mismo curso.
-3. Si alguna similitud supera ``DUPLICATE_SIMILARITY_THRESHOLD``, la pregunta
-   queda marcada como candidata a duplicado.
-4. Opcionalmente, un juez LLM decide si la nueva y la candidata son
-   matemáticamente la misma pregunta (ignorando variaciones de notación/OCR).
-   Si no hay juez disponible, se usa el candidato de mayor similitud.
-5. Si se confirma el duplicado, se descarta el texto nuevo y se fusionan los
-   metadatos (orígenes ``source_reference`` y prerrequisitos) en la pregunta
-   existente. Nunca se almacenan soluciones ni respuestas correctas.
+2. It is compared (cosine similarity) against the embeddings already stored in
+   the database, restricted to the same course.
+3. If any similarity exceeds ``DUPLICATE_SIMILARITY_THRESHOLD``, the question is
+   marked as a duplicate candidate.
+4. Optionally, an LLM judge decides whether the new question and the candidate
+   are mathematically the same question (ignoring notation/OCR variations). If
+   no judge is available, the highest-similarity candidate is used.
+5. If the duplicate is confirmed, the new text is discarded and the metadata
+   (``source_reference`` origins and prerequisites) is merged into the existing
+   question. Solutions or correct answers are never stored.
 
-La generación de embeddings es local (``sentence-transformers``) y el juez LLM
-degradan de forma controlada: si el modelo local o el proveedor no están
-disponibles, la ingesta continúa y se conserva únicamente la deduplicación por
-hash exacto de :meth:`Database.insert_question`.
+Embedding generation is local (``sentence-transformers``) and the LLM judge
+degrade in a controlled way: if the local model or the provider are unavailable,
+ingestion continues and only the exact-hash deduplication of
+:meth:`Database.insert_question` is kept.
 """
 
 from __future__ import annotations
@@ -47,12 +47,12 @@ __all__ = [
     "merge_duplicate_metadata",
 ]
 
-#: Número máximo de candidatos a enviar al juez LLM.
+#: Maximum number of candidates to send to the LLM judge.
 _MAX_CANDIDATES = 5
 
 
 class DuplicateJudgement(BaseModel):
-    """Veredicto del juez LLM sobre un candidato a duplicado."""
+    """LLM judge verdict on a duplicate candidate."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -67,7 +67,7 @@ class DuplicateJudgement(BaseModel):
 
 @dataclass(slots=True)
 class DedupOutcome:
-    """Resultado del filtro de deduplicación sobre una pregunta nueva."""
+    """Result of the deduplication filter on a new question."""
 
     status: Literal["INSERTED", "DUPLICATE"]
     existing_id: str | None = None
@@ -91,7 +91,7 @@ alguna candidata.
 
 
 def _origin_references(question: EnrichedQuestion) -> list[str]:
-    """Recupera los orígenes (``source_reference``) conocidos de una pregunta."""
+    """Retrieves the known origins (``source_reference``) of a question."""
     metadata = question.source_metadata or {}
     references = [str(ref) for ref in metadata.get("source_references", []) if ref]
     primary = metadata.get("source_reference")
@@ -103,11 +103,12 @@ def _origin_references(question: EnrichedQuestion) -> list[str]:
 def merge_duplicate_metadata(
     existing: EnrichedQuestion, incoming: EnrichedQuestion
 ) -> EnrichedQuestion:
-    """Fusiona los metadatos de una pregunta duplicada entrante en la existente.
+    """Merges the metadata of an incoming duplicate question into the existing one.
 
-    Conserva el enunciado, alternativas y clasificación de la pregunta ya
-    almacenada (la "canónica") y añade los orígenes y prerrequisitos de la nueva.
-    No modifica soluciones ni respuestas correctas (el esquema no las contiene).
+    Keeps the statement, choices and classification of the already-stored
+    question (the "canonical" one) and adds the origins and prerequisites of the
+    new one. It does not modify solutions or correct answers (the schema does not
+    contain them).
     """
     references = list(dict.fromkeys(_origin_references(existing) + _origin_references(incoming)))
     source_metadata = dict(existing.source_metadata)
@@ -124,7 +125,7 @@ def merge_duplicate_metadata(
 
 
 class DeduplicationService:
-    """Coordina embeddings, similitud y juez LLM para la deduplicación semántica."""
+    """Coordinates embeddings, similarity and the LLM judge for semantic deduplication."""
 
     def __init__(
         self,
@@ -135,15 +136,15 @@ class DeduplicationService:
         judge_model: str | None = None,
         threshold: float | None = None,
     ) -> None:
-        """Crea el servicio.
+        """Creates the service.
 
         Args:
-            database: Acceso a la base de datos (preguntas y embeddings).
-            settings: Configuración a usar; por defecto la global.
-            embedder: :class:`Embedder` ya construido (inyectable en pruebas).
-            judge_model: Sobrescribe ``LLM_MODEL`` para el juez de duplicados.
-            threshold: Sobrescribe ``DUPLICATE_SIMILARITY_THRESHOLD`` (útil en
-                scripts de migración y pruebas).
+            database: Database access (questions and embeddings).
+            settings: Configuration to use; defaults to the global one.
+            embedder: An already-built :class:`Embedder` (injectable in tests).
+            judge_model: Overrides ``LLM_MODEL`` for the duplicate judge.
+            threshold: Overrides ``DUPLICATE_SIMILARITY_THRESHOLD`` (useful in
+                migration scripts and tests).
         """
         self.settings = settings or get_settings()
         self.database = database
@@ -183,25 +184,26 @@ class DeduplicationService:
         return self._judge_client
 
     def embed_question(self, question: EnrichedQuestion) -> list[float] | None:
-        """Genera el embedding de una pregunta de forma best-effort.
+        """Generates a question embedding on a best-effort basis.
 
-        Devuelve ``None`` (sin elevar) si el modelo local falla al cargar o al
-        codificar, para no bloquear la ingesta.
+        Returns ``None`` (without raising) if the local model fails to load or
+        encode, so as not to block ingestion.
         """
         try:
             return self.embedder.embed(question_embedding_text(question))
-        except Exception:  # noqa: BLE001 - la deduplicación semántica es opcional
+        except Exception:  # noqa: BLE001 - semantic deduplication is optional
             logger.warning(
-                "no se pudo generar el embedding de la pregunta %s", question.id, exc_info=True
+                "could not generate the embedding for question %s", question.id, exc_info=True
             )
             return None
 
     def ingest(self, question: EnrichedQuestion) -> DedupOutcome:
-        """Ejecuta el filtro de ingesta y devuelve el resultado.
+        """Runs the ingestion filter and returns the result.
 
-        Genera el embedding, busca candidatos por similitud, consulta al juez y,
-        si confirma un duplicado, fusiona los metadatos en la pregunta existente.
-        En caso contrario delega en :meth:`Database.insert_question`.
+        Generates the embedding, looks up candidates by similarity, queries the
+        judge and, if a duplicate is confirmed, merges the metadata into the
+        existing question. Otherwise it delegates to
+        :meth:`Database.insert_question`.
         """
         embedding = self.embed_question(question)
         if embedding is not None:
@@ -222,7 +224,7 @@ class DeduplicationService:
                             status="DUPLICATE",
                             existing_id=existing_id,
                             similarity=similarities[match_index],
-                            reason="pregunta duplicada (similitud semántica)",
+                            reason="duplicate question (semantic similarity)",
                         )
         status = self.database.insert_question(question, embedding=embedding)
         return DedupOutcome(status=status)
@@ -230,10 +232,11 @@ class DeduplicationService:
     def judge(
         self, new_question: EnrichedQuestion, candidates: list[EnrichedQuestion]
     ) -> DuplicateJudgement | None:
-        """Consulta al juez LLM si la nueva es duplicado de alguna candidata.
+        """Asks the LLM judge whether the new question duplicates any candidate.
 
-        Devuelve ``None`` si no hay candidatas, el LLM no está configurado o el
-        juez falla; en ese caso el llamador puede caer al umbral de similitud.
+        Returns ``None`` if there are no candidates, the LLM is not configured or
+        the judge fails; in that case the caller can fall back to the similarity
+        threshold.
         """
         if not candidates or not self.settings.llm_configured:
             return None
@@ -248,9 +251,10 @@ class DeduplicationService:
                 messages=messages,
                 temperature=0.0,
             )
-        except Exception:  # noqa: BLE001 - el juez es opcional; se degrada al umbral
+        except Exception:  # noqa: BLE001 - the judge is optional; fall back to the threshold
             logger.warning(
-                "el juez de duplicados falló; se usa el umbral de similitud", exc_info=True
+                "the duplicate judge failed; falling back to the similarity threshold",
+                exc_info=True,
             )
             return None
 
@@ -277,7 +281,7 @@ class DeduplicationService:
             if judgement.is_duplicate and 0 <= judgement.matching_index < len(candidates):
                 return judgement.matching_index
             return None
-        # Sin juez (no configurado o fallo): el candidato de mayor similitud.
+        # No judge (not configured or failed): the highest-similarity candidate.
         return 0
 
     def _merge_into(self, existing_id: str, incoming: EnrichedQuestion) -> None:
@@ -285,7 +289,7 @@ class DeduplicationService:
         if existing is None:
             return
         merged = merge_duplicate_metadata(existing, incoming)
-        # El enunciado no cambia, por lo que el embedding existente sigue siendo válido.
+        # The statement does not change, so the existing embedding is still valid.
         self.database.update_question(merged)
 
     @staticmethod

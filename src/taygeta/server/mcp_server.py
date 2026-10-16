@@ -1,15 +1,15 @@
-"""Servidor MCP de Taygeta (sección 9).
+"""Taygeta MCP server (section 9).
 
-Expone las herramientas FastMCP del flujo HITL y de recuperación RAG:
+Exposes the FastMCP tools of the HITL flow and RAG retrieval:
 
-* ``stage_exam_upload`` (ingesta Headless con ``auto_commit``),
-  ``refine_staged_question``, ``confirm_staged_upload`` (staging asistido por chat);
-* ``search_questions`` y ``list_taxonomy`` (recuperación RAG y catálogo);
-* ``generate_practice_exam`` y ``get_exam_source`` (generación y compilación).
+* ``stage_exam_upload`` (headless ingestion with ``auto_commit``),
+  ``refine_staged_question``, ``confirm_staged_upload`` (chat-assisted staging);
+* ``search_questions`` and ``list_taxonomy`` (RAG retrieval and catalog);
+* ``generate_practice_exam`` and ``get_exam_source`` (generation and compilation).
 
-Además monta la ruta HTTP ``/download/{filename}`` (y una ``/assets/{asset_id}``
-controlada) y un limpiador en segundo plano con TTL de 60 minutos para los
-archivos temporales de ``/app/downloads``.
+It also mounts the HTTP route ``/download/{filename}`` (and a controlled
+``/assets/{asset_id}``) plus a background cleaner with a 60-minute TTL for the
+temporary files in ``/app/downloads``.
 """
 
 from __future__ import annotations
@@ -49,13 +49,13 @@ logger = logging.getLogger(__name__)
 
 __all__ = ["mcp", "main", "start_download_cleaner"]
 
-#: Campos editables de una pregunta que admiten overrides manuales.
+#: Editable fields of a question that accept manual overrides.
 _ALLOWED_OVERRIDES = frozenset({"statement_raw", "question_type", "choices", "notation_notes"})
 
-#: Campos curriculares que se adjuntan al payload de staging para su confirmación.
+#: Curricular fields attached to the staging payload for confirmation.
 _CURRICULAR_OVERRIDES = frozenset({"course", "topic", "subtopic", "difficulty", "prerequisites"})
 
-#: Límite máximo de resultados de búsqueda para proteger el servicio.
+#: Maximum search result limit to protect the service.
 _MAX_SEARCH_LIMIT = 100
 
 _settings = get_settings()
@@ -72,7 +72,7 @@ def _resources() -> tuple[Settings, Database, ObjectStorage, IngestPipeline, Exa
 
 
 # ---------------------------------------------------------------------------
-# Utilidades de seguridad y formato
+# Security and formatting utilities
 # ---------------------------------------------------------------------------
 
 
@@ -87,13 +87,13 @@ def _public_question(
     *,
     locale: str | None = None,
 ) -> dict[str, Any]:
-    """Serializa una pregunta resolviendo figuras y adjuntando sus traducciones.
+    """Serializes a question, resolving figures and attaching its translations.
 
-    Antes de enviar la información al frontend o al cliente MCP, cada ruta
-    relativa de figura (``/buckets/{bucket}/{key}``) se convierte en su URL
-    completa concatenando ``S3_PUBLIC_BASE_URL``. Con ``database`` se adjuntan
-    las copias localizadas: por defecto ``statement_by_locale`` (todos los
-    idiomas) y, si se pide ``locale``, también el ``statement`` resuelto.
+    Before sending the information to the frontend or the MCP client, each
+    relative figure path (``/buckets/{bucket}/{key}``) is turned into its full URL
+    by concatenating ``S3_PUBLIC_BASE_URL``. With ``database`` the localized
+    copies are attached: by default ``statement_by_locale`` (all locales) and, if
+    ``locale`` is requested, also the resolved ``statement``.
     """
     data = question.model_dump()
     for figure in data.get("figures", []):
@@ -114,38 +114,38 @@ def _public_question(
 
 
 def _resolve_upload_path(file_path: str, settings: Settings) -> Path:
-    """Valida que ``file_path`` esté dentro de ``UPLOADS_DIR`` y sea un archivo."""
+    """Validates that ``file_path`` is inside ``UPLOADS_DIR`` and is a file."""
     uploads = Path(settings.UPLOADS_DIR).expanduser().resolve()
     candidate = Path(file_path)
     if not candidate.is_absolute():
         candidate = uploads / candidate
     candidate = candidate.resolve()
     if candidate != uploads and not candidate.is_relative_to(uploads):
-        raise ValueError("la ruta está fuera del directorio de uploads")
+        raise ValueError("the path is outside the uploads directory")
     if not candidate.is_file():
-        raise ValueError(f"el archivo no existe: {candidate}")
+        raise ValueError(f"the file does not exist: {candidate}")
     return candidate
 
 
 def _resolve_download_path(filename: str, settings: Settings) -> Path:
-    """Valida un nombre de archivo de descarga para impedir traversal."""
+    """Validates a download file name to prevent traversal."""
     downloads = Path(settings.DOWNLOADS_DIR).expanduser().resolve()
     if not filename or filename.startswith("/") or ".." in Path(filename).parts:
-        raise ValueError("nombre de archivo inválido")
+        raise ValueError("invalid file name")
     candidate = (downloads / filename).resolve()
     if not candidate.is_relative_to(downloads):
-        raise ValueError("la ruta de descarga está fuera del directorio permitido")
+        raise ValueError("the download path is outside the allowed directory")
     if not candidate.is_file():
-        raise ValueError("archivo no encontrado")
+        raise ValueError("file not found")
     return candidate
 
 
 def _apply_overrides(question: QuestionRaw, overrides: dict[str, Any] | None) -> QuestionRaw:
-    """Aplica únicamente los overrides manuales permitidos sobre la pregunta.
+    """Applies only the allowed manual overrides on top of the question.
 
-    ``model_copy`` no ejecuta los validadores de Pydantic, por lo que el enunciado
-    y las alternativas manuales se sanitizan aquí explícitamente para no
-    reintroducir delimitadores TeX no estándar (``\\[...\\]``, ``\\(...\\)``).
+    ``model_copy`` does not run the Pydantic validators, so the manual statement
+    and choices are explicitly sanitized here to avoid reintroducing non-standard
+    TeX delimiters (``\\[...\\]``, ``\\(...\\)``).
     """
     if not overrides:
         return question
@@ -160,26 +160,26 @@ def _apply_overrides(question: QuestionRaw, overrides: dict[str, Any] | None) ->
 
 
 # ---------------------------------------------------------------------------
-# Herramientas MCP — staging asistido por chat
+# MCP tools — chat-assisted staging
 # ---------------------------------------------------------------------------
 
 
 @mcp.tool()
 def stage_exam_upload(file_path: str, auto_commit: bool = True) -> str:
-    """Procesa un archivo de /app/uploads con el flujo Headless.
+    """Processes a file from /app/uploads with the headless flow.
 
-    Ejecuta el pipeline de doble pase y las dos capas de validación. Si todas las
-    preguntas son ``VALID`` y ``auto_commit`` está activo, las guarda directamente
-    en la base de datos y marca la sesión como ``CONFIRMED``. Si hay incidencias
-    (``NEEDS_ATTENTION``, ``ERROR`` o ``DUPLICATE``), persiste la sesión de staging
-    en la base de datos y devuelve su identificador y la URL de revisión, de modo
-    que ``refine_staged_question`` y ``confirm_staged_upload`` cierren el ciclo.
+    Runs the two-pass pipeline and the two validation layers. If all questions
+    are ``VALID`` and ``auto_commit`` is active, it stores them directly in the
+    database and marks the session as ``CONFIRMED``. If there are issues
+    (``NEEDS_ATTENTION``, ``ERROR`` or ``DUPLICATE``), it persists the staging
+    session in the database and returns its identifier and the review URL, so
+    that ``refine_staged_question`` and ``confirm_staged_upload`` close the loop.
     """
     try:
         settings, database, storage, pipeline, _exams = _resources()
         path = _resolve_upload_path(file_path, settings)
         result = pipeline.ingest(path, persist_staging=True)
-    except Exception as exc:  # noqa: BLE001 - se informa al chat, no se oculta
+    except Exception as exc:  # noqa: BLE001 - reported to the chat, never hidden
         return _json({"status": "error", "message": str(exc)})
 
     session_id = result.session_id
@@ -187,7 +187,7 @@ def stage_exam_upload(file_path: str, auto_commit: bool = True) -> str:
         return _json(
             {
                 "status": "error",
-                "message": "no se pudo persistir la sesión de staging en la base de datos",
+                "message": "could not persist the staging session in the database",
             }
         )
 
@@ -221,9 +221,7 @@ def stage_exam_upload(file_path: str, auto_commit: bool = True) -> str:
                     "saved": saved,
                     "total": summary["total"],
                     "warnings": [*result.warnings, *extra_warnings],
-                    "message": (
-                        f"{len(saved)} pregunta(s) guardadas automáticamente en la base de datos."
-                    ),
+                    "message": (f"{len(saved)} question(s) automatically saved to the database."),
                 }
             )
         problems = save_problems
@@ -231,11 +229,11 @@ def stage_exam_upload(file_path: str, auto_commit: bool = True) -> str:
     review_url = f"{settings.UI_PUBLIC_URL.rstrip('/')}/?session_id={session_id}"
     status = STATUS_NEEDS_ATTENTION if problems else result.status
     if problems:
-        message = "hay incidencias; revisa la sesión en la UI: " + review_url
+        message = "there are issues; review the session in the UI: " + review_url
     else:
         message = (
-            f"{summary['valid']} pregunta(s) válida(s) en la sesión de staging; "
-            "revisa y confirma en la UI: " + review_url
+            f"{summary['valid']} valid question(s) in the staging session; "
+            "review and confirm in the UI: " + review_url
         )
     return _json(
         {
@@ -259,20 +257,21 @@ def refine_staged_question(
     user_hint: str,
     manual_overrides: dict[str, Any] | None = None,
 ) -> str:
-    """Reanaliza una pregunta de staging con contexto correctivo.
+    """Reanalyzes a staging question with corrective context.
 
-    Aplica los overrides manuales (enunciado, tipo, alternativas y clasificación
-    curricular) y los conserva explícitamente. No resuelve el ejercicio.
+    Applies the manual overrides (statement, type, choices and curricular
+    classification) and preserves them explicitly. It does not solve the
+    exercise.
     """
     try:
         _settings, database, _storage, pipeline, _exams = _resources()
         session = database.get_staging_session(session_id)
         if session is None:
-            return _json({"status": "error", "message": f"sesión no encontrada: {session_id}"})
+            return _json({"status": "error", "message": f"session not found: {session_id}"})
         data = session["data"]
         questions = data.get("questions", [])
         if q_index < 0 or q_index >= len(questions):
-            return _json({"status": "error", "message": f"índice fuera de rango: {q_index}"})
+            return _json({"status": "error", "message": f"index out of range: {q_index}"})
 
         overrides = manual_overrides or {}
         raw_overrides = {
@@ -288,7 +287,7 @@ def refine_staged_question(
             return _json(
                 {
                     "status": "error",
-                    "message": f"la pregunta {q_index} no tiene enunciado que reanalizar",
+                    "message": f"question {q_index} has no statement to reanalyze",
                 }
             )
         current = EnrichedQuestion.model_validate(current_payload)
@@ -327,20 +326,19 @@ def refine_staged_question(
 
 @mcp.tool()
 def confirm_staged_upload(session_id: str) -> str:
-    """Confirma una sesión de staging y persiste las preguntas aprobadas.
+    """Confirms a staging session and persists the approved questions.
 
-    Es idempotente: una sesión ya confirmada se informa sin reinsertar.
+    It is idempotent: a session that is already confirmed is reported without
+    reinserting.
     """
     try:
         _settings, database, storage, _pipeline, _exams = _resources()
         dedup = DeduplicationService(database)
         session = database.get_staging_session(session_id)
         if session is None:
-            return _json({"status": "error", "message": f"sesión no encontrada: {session_id}"})
+            return _json({"status": "error", "message": f"session not found: {session_id}"})
         if session["status"] == "CONFIRMED":
-            return _json(
-                {"status": "ok", "message": f"la sesión {session_id} ya estaba confirmada"}
-            )
+            return _json({"status": "ok", "message": f"session {session_id} was already confirmed"})
 
         saved: list[str] = []
         skipped: list[str] = []
@@ -349,14 +347,14 @@ def confirm_staged_upload(session_id: str) -> str:
         translations = TranslationService(database, semantic=_pipeline.semantic)
         for item in session["data"].get("questions", []):
             if item.get("status") != STATUS_VALID:
-                skipped.append(f"{item.get('question', {}).get('id', '?')} (no VALID)")
+                skipped.append(f"{item.get('question', {}).get('id', '?')} (not VALID)")
                 continue
             payload = item.get("question")
             if not payload:
                 continue
             question = _enrich(payload, storage)
             if question is None:
-                skipped.append(f"{payload.get('id', '?')} (sin clasificación curricular)")
+                skipped.append(f"{payload.get('id', '?')} (no curricular classification)")
                 continue
             try:
                 database.add_prerequisites(list(question.prerequisites))
@@ -389,7 +387,7 @@ def confirm_staged_upload(session_id: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Herramientas MCP — consultas y RAG
+# MCP tools — queries and RAG
 # ---------------------------------------------------------------------------
 
 
@@ -401,11 +399,11 @@ def search_questions(
     limit: int = 20,
     locale: str = "",
 ) -> str:
-    """Recupera preguntas reales por curso, tema y dificultad (sin soluciones).
+    """Retrieves real questions by course, topic and difficulty (without solutions).
 
-    Por defecto cada pregunta incluye ``statement_by_locale`` con todas las copias
-    localizadas; con ``locale`` (``es``/``en``) incluye además ``statement`` ya
-    resuelto para ese idioma.
+    By default each question includes ``statement_by_locale`` with all the
+    localized copies; with ``locale`` (``es``/``en``) it also includes the
+    ``statement`` already resolved for that language.
     """
     try:
         settings, database, _storage, _pipeline, _exams = _resources()
@@ -432,10 +430,10 @@ def search_questions(
 
 @mcp.tool()
 def list_taxonomy(locale: str = "") -> str:
-    """Consulta el catálogo de cursos, temas, subtemas y prerrequisitos.
+    """Queries the catalog of courses, topics, subtopics and prerequisites.
 
-    Por defecto incluye un mapa ``names`` con todos los idiomas; con ``locale``
-    (``es``/``en``) devuelve una forma plana con un único ``name`` por entrada.
+    By default it includes a ``names`` map with all the locales; with ``locale``
+    (``es``/``en``) it returns a flat shape with a single ``name`` per entry.
     """
     try:
         _settings, database, _storage, _pipeline, _exams = _resources()
@@ -445,7 +443,7 @@ def list_taxonomy(locale: str = "") -> str:
 
 
 # ---------------------------------------------------------------------------
-# Herramientas MCP — generación y compilación
+# MCP tools — generation and compilation
 # ---------------------------------------------------------------------------
 
 
@@ -457,10 +455,10 @@ def generate_practice_exam(
     num_questions: int = 10,
     locale: str = "",
 ) -> str:
-    """Genera y compila un examen de práctica en PDF con Typst.
+    """Generates and compiles a practice exam as a PDF with Typst.
 
-    Con ``locale`` (``es``/``en``) se usa la copia traducida del enunciado cuando
-    existe y el nombre de curso localizado.
+    With ``locale`` (``es``/``en``) the translated copy of the statement is used
+    when it exists, along with the localized course name.
     """
     try:
         _settings, _database, _storage, _pipeline, exams = _resources()
@@ -478,7 +476,7 @@ def generate_practice_exam(
 
 @mcp.tool()
 def get_exam_source(exam_id: str, format: str = "typst") -> str:
-    """Genera y devuelve la URL de un ZIP con la fuente del examen."""
+    """Generates and returns the URL of a ZIP with the exam source."""
     try:
         settings, _database, _storage, _pipeline, exams = _resources()
         zip_path = exams.build_source_zip(exam_id, format=format)
@@ -491,7 +489,7 @@ def get_exam_source(exam_id: str, format: str = "typst") -> str:
 
 
 # ---------------------------------------------------------------------------
-# Helpers internos de staging
+# Internal staging helpers
 # ---------------------------------------------------------------------------
 
 
@@ -511,10 +509,10 @@ def _intermediate_from_session(data: dict[str, Any]) -> TranscriptionIntermediat
 
 
 def _taxonomy_names_from_payload(payload: Any) -> list[TaxonomyNames]:
-    """Reconstruye nombres de taxonomía desde un payload de staging (tolerante).
+    """Rebuilds taxonomy names from a staging payload (tolerant).
 
-    Los nombres son datos de presentación opcionales: una entrada malformada se
-    descarta en lugar de invalidar la confirmación.
+    The names are optional presentation data: a malformed entry is dropped
+    instead of invalidating the confirmation.
     """
     if not isinstance(payload, list):
         return []
@@ -524,7 +522,7 @@ def _taxonomy_names_from_payload(payload: Any) -> list[TaxonomyNames]:
             continue
         try:
             names.append(TaxonomyNames.model_validate(item))
-        except Exception:  # noqa: BLE001 - presentación opcional, nunca bloquea
+        except Exception:  # noqa: BLE001 - optional presentation, never blocks
             continue
     return names
 
@@ -534,11 +532,11 @@ def _persist_taxonomy_names(
     names: list[TaxonomyNames],
     question: EnrichedQuestion,
 ) -> None:
-    """Persiste los nombres del LLM que aún coinciden con la clasificación final.
+    """Persists the LLM names that still match the final classification.
 
-    Se escribe con ``source='llm'`` para no pisar nombres sembrados o editados a
-    mano. Los nombres de entradas cuya clasificación cambió durante la revisión se
-    descartan.
+    It is written with ``source='llm'`` so as not to overwrite names that were
+    seeded or edited by hand. Names of entries whose classification changed
+    during review are dropped.
     """
     applicable = filter_taxonomy_names(
         names,
@@ -558,12 +556,12 @@ def _save_headless(
     dedup: DeduplicationService,
     translations: TranslationService,
 ) -> tuple[list[str], list[dict[str, Any]], list[str]]:
-    """Persiste automáticamente las preguntas VALID de una ingesta headless.
+    """Automatically persists the VALID questions of a headless ingestion.
 
-    Usa :class:`DeduplicationService` para detectar duplicados semánticos (por
-    embeddings y, opcionalmente, juez LLM) y captura cualquier excepción como
-    ``ERROR``. Devuelve los ids guardados, la lista de incidencias y una lista de
-    advertencias (p. ej. traducciones que no se pudieron generar o validar).
+    Uses :class:`DeduplicationService` to detect semantic duplicates (by
+    embeddings and, optionally, an LLM judge) and captures any exception as
+    ``ERROR``. Returns the saved ids, the list of issues and a list of warnings
+    (e.g. translations that could not be generated or validated).
     """
     saved: list[str] = []
     problems: list[dict[str, Any]] = []
@@ -586,7 +584,7 @@ def _save_headless(
                     {
                         "id": question.id,
                         "status": "ERROR",
-                        "reasons": ["sin clasificación curricular"],
+                        "reasons": ["no curricular classification"],
                     }
                 )
                 continue
@@ -603,7 +601,7 @@ def _save_headless(
                 {
                     "id": question.id,
                     "status": "DUPLICATE",
-                    "reasons": [outcome.reason or "pregunta duplicada"],
+                    "reasons": [outcome.reason or "duplicate question"],
                 }
             )
         else:
@@ -613,10 +611,10 @@ def _save_headless(
 
 
 def _enrich(payload: dict[str, Any], storage: ObjectStorage) -> EnrichedQuestion | None:
-    """Construye una ``EnrichedQuestion`` a partir del payload de staging.
+    """Builds an ``EnrichedQuestion`` from the staging payload.
 
-    Requiere clasificación curricular (course/topic/difficulty) y verifica que
-    las figuras estén en el bucket persistente antes de persistir.
+    Requires curricular classification (course/topic/difficulty) and verifies
+    that the figures are in the persistent bucket before persisting.
     """
     payload = dict(payload)
     for key in ("course", "topic", "difficulty"):
@@ -627,30 +625,30 @@ def _enrich(payload: dict[str, Any], storage: ObjectStorage) -> EnrichedQuestion
     question = EnrichedQuestion.model_validate(payload)
     for figure in question.figures:
         if not figure.asset_path:
-            raise ValueError(f"la figura {figure.id} no tiene identificador persistente")
+            raise ValueError(f"figure {figure.id} has no persistent identifier")
         bucket, key = split_asset_reference(figure.asset_path)
         if bucket:
             if not storage.exists(key, bucket=bucket):
-                raise ValueError(f"la figura {figure.id} no está en el bucket")
+                raise ValueError(f"figure {figure.id} is not in the bucket")
         elif not storage.exists(figure.asset_path):
-            raise ValueError(f"la figura {figure.id} no está en el bucket")
+            raise ValueError(f"figure {figure.id} is not in the bucket")
     return question
 
 
 # ---------------------------------------------------------------------------
-# Rutas HTTP y limpiador TTL
+# HTTP routes and TTL cleaner
 # ---------------------------------------------------------------------------
 
 
 @mcp.custom_route("/health", methods=["GET"])
 async def health(_request: Request) -> Response:
-    """Endpoint de salud para healthchecks de Docker Compose."""
+    """Health endpoint for Docker Compose healthchecks."""
     return JSONResponse({"status": "ok"})
 
 
 @mcp.custom_route("/download/{filename:path}", methods=["GET"])
 async def download_file(request: Request) -> Response:
-    """Sirve un archivo temporal del directorio de descargas."""
+    """Serves a temporary file from the downloads directory."""
     settings = get_settings()
     filename = request.path_params.get("filename", "")
     try:
@@ -663,10 +661,10 @@ async def download_file(request: Request) -> Response:
 
 @mcp.custom_route("/assets/{asset_id:path}", methods=["GET"])
 async def asset_proxy(request: Request) -> Response:
-    """Devuelve una figura desde SeaweedFS por su identificador controlado.
+    """Returns a figure from SeaweedFS by its controlled identifier.
 
-    No es un proxy S3 arbitrario: el identificador debe ser una clave o URI
-    s3:// válida, y se valida contra el almacenamiento configurado.
+    It is not an arbitrary S3 proxy: the identifier must be a valid key or
+    s3:// URI, and it is validated against the configured storage.
     """
     settings = get_settings()
     asset_id = request.path_params.get("asset_id", "")
@@ -687,7 +685,7 @@ async def asset_proxy(request: Request) -> Response:
 
 
 def _clean_downloads(settings: Settings) -> int:
-    """Elimina archivos temporales de ``DOWNLOADS_DIR`` con más de ``TTL`` segundos."""
+    """Removes temporary files from ``DOWNLOADS_DIR`` older than ``TTL`` seconds."""
     downloads = Path(settings.DOWNLOADS_DIR).expanduser()
     if not downloads.is_dir():
         return 0
@@ -700,17 +698,17 @@ def _clean_downloads(settings: Settings) -> int:
                     path.unlink()
                     removed += 1
             except OSError as exc:  # noqa: BLE001
-                logger.warning("no se pudo eliminar %s: %s", path, exc)
+                logger.warning("could not delete %s: %s", path, exc)
     return removed
 
 
 def start_download_cleaner(
     settings: Settings | None = None, *, interval_seconds: int = 300
 ) -> threading.Thread:
-    """Inicia un thread en segundo plano que limpia descargas expiradas.
+    """Starts a background thread that cleans expired downloads.
 
-    Solo toca archivos de ``DOWNLOADS_DIR``: nunca la base de datos, las cargas
-    originales ni los objetos persistentes del bucket.
+    It only touches files in ``DOWNLOADS_DIR``: never the database, the original
+    uploads nor the persistent objects in the bucket.
     """
     resolved = settings or get_settings()
 
@@ -719,9 +717,9 @@ def start_download_cleaner(
             try:
                 removed = _clean_downloads(resolved)
                 if removed:
-                    logger.info("limpiador de descargas eliminó %d archivo(s)", removed)
+                    logger.info("download cleaner removed %d file(s)", removed)
             except Exception as exc:  # noqa: BLE001
-                logger.warning("error en el limpiador de descargas: %s", exc)
+                logger.warning("error in the download cleaner: %s", exc)
             time.sleep(interval_seconds)
 
     thread = threading.Thread(target=_loop, name="taygeta-download-cleaner", daemon=True)
@@ -730,15 +728,15 @@ def start_download_cleaner(
 
 
 # ---------------------------------------------------------------------------
-# Punto de entrada
+# Entry point
 # ---------------------------------------------------------------------------
 
 
 def main() -> None:
-    """Arranca el servidor MCP con transporte HTTP y el limpiador TTL."""
+    """Starts the MCP server with the HTTP transport and the TTL cleaner."""
     settings = get_settings()
     start_download_cleaner(settings)
-    logger.info("servidor MCP de Taygeta escuchando en %s:%s", settings.MCP_HOST, settings.MCP_PORT)
+    logger.info("Taygeta MCP server listening on %s:%s", settings.MCP_HOST, settings.MCP_PORT)
     mcp.run(transport="streamable-http")
 
 

@@ -1,4 +1,4 @@
-"""Taygeta: banco de exámenes científicos y sistema de recuperación MCP."""
+"""Taygeta: scientific exam bank and MCP retrieval system."""
 
 from __future__ import annotations
 

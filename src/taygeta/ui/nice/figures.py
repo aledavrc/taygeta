@@ -1,12 +1,12 @@
-"""Operaciones y componentes de figuras para la revisión NiceGUI.
+"""Figure operations and components for the NiceGUI review.
 
-El ``DragBoxCropper`` dibuja el recuadro de recorte con arrastre sobre
-``ui.interactive_image`` (overlay SVG en coordenadas de píxeles de la imagen,
-sin dependencias npm), entrega el recuadro en píxeles de la imagen original y
-ofrece zoom (1×-4×) para ver con precisión qué se va a recortar; las funciones
-``crop_new_figure`` y ``replace_figure_crop`` recortan, suben y registran
-figuras reutilizando los helpers puros de ``figure_editing`` y los clientes
-compartidos de rasterización/almacenamiento.
+``DragBoxCropper`` draws the crop box by dragging over
+``ui.interactive_image`` (SVG overlay in image pixel coordinates, with no npm
+dependencies), delivers the box in original image pixels and offers zoom
+(1x-4x) to see precisely what is going to be cropped; the functions
+``crop_new_figure`` and ``replace_figure_crop`` crop, upload and register
+figures reusing the pure helpers of ``figure_editing`` and the shared
+rasterization/storage clients.
 """
 
 from __future__ import annotations
@@ -29,7 +29,7 @@ from taygeta.ui.shared import figure_bytes, page_image_raster
 
 
 def figure_pil(storage: ObjectStorage | None, asset_path: str | None) -> Image.Image | None:
-    """Abre una figura de SeaweedFS como ``PIL.Image`` para ``ui.image``."""
+    """Open a SeaweedFS figure as a ``PIL.Image`` for ``ui.image``."""
     data = figure_bytes(storage, asset_path)
     if not data:
         return None
@@ -42,12 +42,12 @@ def figure_pil(storage: ObjectStorage | None, asset_path: str | None) -> Image.I
 def page_pil(
     source_path: str | Path | None, page_index: int, *, dpi: int = 300
 ) -> tuple[Image.Image, int, int] | None:
-    """Rasteriza la página ``page_index`` como imagen PIL + tamaño en píxeles.
+    """Rasterize page ``page_index`` as a PIL image + size in pixels.
 
-    Usa 300 DPI (igual que los recortes) para que el zoom del cropper se vea
-    nítido en documentos PDF; en escaneos el rasterizado conserva la resolución
-    nativa. Devuelve ``(imagen, width_px, height_px)`` o ``None`` si el origen
-    no está disponible o la página no existe.
+    Uses 300 DPI (same as the crops) so the cropper's zoom looks sharp on PDF
+    documents; on scans the rasterization keeps the native resolution. Returns
+    ``(image, width_px, height_px)`` or ``None`` if the source is unavailable or
+    the page does not exist.
     """
     if source_path is None:
         return None
@@ -68,21 +68,21 @@ def crop_new_figure(
     source_path: str | Path | None,
     storage: ObjectStorage | None,
 ) -> tuple[list[dict[str, Any]], str, str]:
-    """Recorta, sube y registra una figura nueva; devuelve (figuras, enunciado, id).
+    """Crop, upload and register a new figure; returns (figures, statement, id).
 
-    Cubre los falsos negativos: recorta la región indicada de la página original
-    (300 DPI), la persiste con la convención del pipeline
-    (``figures/{uuid}.png``) y delega en ``build_new_figure`` la asignación del
-    siguiente ``fig:N`` libre y la inserción de su placeholder al final del
-    enunciado.
+    Covers false negatives: crops the indicated region of the original page
+    (300 DPI), persists it with the pipeline's convention
+    (``figures/{uuid}.png``) and delegates to ``build_new_figure`` the assignment
+    of the next free ``fig:N`` and the insertion of its placeholder at the end of
+    the statement.
 
     Raises:
-        ValueError: si no hay origen o almacenamiento disponibles.
+        ValueError: if no source or storage is available.
     """
     if source_path is None:
-        raise ValueError("no hay documento de origen disponible para recortar")
+        raise ValueError("no source document available to crop")
     if storage is None:
-        raise ValueError("almacenamiento no disponible para guardar la figura")
+        raise ValueError("storage not available to store the figure")
     png = crop_figure_bytes(source_path, int(page_index), list(bbox), dpi=DEFAULT_DPI)
     uri = storage.store_asset_bytes(
         png,
@@ -108,19 +108,19 @@ def replace_figure_crop(
     source_path: str | Path | None,
     storage: ObjectStorage | None,
 ) -> list[dict[str, Any]]:
-    """Re-recorta una figura y sobrescribe su asset (misma clave) en SeaweedFS.
+    """Re-crop a figure and overwrite its asset (same key) in SeaweedFS.
 
-    Recorta la región indicada del documento origen a 300 DPI y sobrescribe el
-    objeto existente (misma clave), de modo que ``asset_path`` no cambia.
-    Devuelve la lista actualizada con la nueva BBox.
+    Crops the indicated region of the source document at 300 DPI and overwrites
+    the existing object (same key), so ``asset_path`` does not change. Returns
+    the updated list with the new BBox.
 
     Raises:
-        ValueError: si la figura no tiene asset persistente o faltan servicios.
+        ValueError: if the figure has no persistent asset or services are missing.
     """
     if source_path is None:
-        raise ValueError("no hay documento de origen disponible para recortar")
+        raise ValueError("no source document available to crop")
     if storage is None:
-        raise ValueError("almacenamiento no disponible para guardar el recorte")
+        raise ValueError("storage not available to store the crop")
     updated: list[dict[str, Any]] = []
     for item in figures:
         if isinstance(item, Mapping):
@@ -132,9 +132,7 @@ def replace_figure_crop(
             continue
         asset_path = figure.get("asset_path")
         if not asset_path:
-            raise ValueError(
-                f"la figura {figure_id} no tiene asset persistente; no se puede sobrescribir"
-            )
+            raise ValueError(f"figure {figure_id} has no persistent asset; cannot overwrite")
         bucket, key = split_asset_reference(asset_path, default_bucket=storage.bucket)
         png = crop_figure_bytes(
             source_path, int(figure.get("page", 0)), list(new_bbox), dpi=DEFAULT_DPI
@@ -145,22 +143,22 @@ def replace_figure_crop(
 
 
 class DragBoxCropper:
-    """Recuadro de recorte dibujado con arrastre sobre una imagen interactiva.
+    """Crop box drawn by dragging over an interactive image.
 
-    Captura ``mousedown``/``mousemove``/``mouseup`` sobre ``ui.interactive_image``
-    y dibuja el rectángulo como overlay SVG (propiedad ``content``, cuyas
-    coordenadas coinciden con los píxeles de la imagen). Al soltar el botón,
-    invoca ``on_confirm`` con ``{"left", "top", "width", "height"}`` en píxeles
-    de la imagen original (clamped a sus dimensiones).
+    Captures ``mousedown``/``mousemove``/``mouseup`` over
+    ``ui.interactive_image`` and draws the rectangle as an SVG overlay (the
+    ``content`` property, whose coordinates match the image pixels). On mouse
+    release, it invokes ``on_confirm`` with ``{"left", "top", "width",
+    "height"}`` in original image pixels (clamped to its dimensions).
 
-    La caja confirmada se conserva dibujada tras soltar el ratón (se guarda en
-    ``self.box``), de modo que la selección no desaparece. ``initial_box``
-    permite sembrar el cropper con la región actual de una figura.
+    The confirmed box stays drawn after releasing the mouse (it is stored in
+    ``self.box``), so the selection does not disappear. ``initial_box`` allows
+    seeding the cropper with a figure's current region.
 
-    Incluye controles de zoom (1×-4×): la imagen se redimensiona por *layout*
-    dentro de un contenedor con scroll (nunca con ``transform: scale()``), así
-    que el mapeo de NiceGUI ``offsetX * naturalWidth / clientWidth`` y el
-    ``viewBox`` del SVG siguen siendo exactos a cualquier ampliación.
+    Includes zoom controls (1x-4x): the image is resized by *layout* inside a
+    scrollable container (never with ``transform: scale()``), so NiceGUI's
+    mapping ``offsetX * naturalWidth / clientWidth`` and the SVG ``viewBox``
+    remain exact at any magnification.
     """
 
     MIN_ZOOM = 1.0
@@ -182,7 +180,7 @@ class DragBoxCropper:
         self.on_confirm = on_confirm
         self.start: tuple[int, int] | None = None
         self.current: tuple[int, int] | None = None
-        #: Última caja confirmada (o la semilla inicial); se redibuja al soltar.
+        #: Last confirmed box (or the initial seed); redrawn on release.
         self.box: dict[str, int] | None = initial_box
         self.zoom = self.MIN_ZOOM
         _caption(caption if caption is not None else t("ui.cropper.select_region"))
@@ -212,8 +210,8 @@ class DragBoxCropper:
                 .tooltip(t("ui.cropper.zoom_reset"))
             )
 
-        # El borde enmarca el viewport (no la imagen): al ampliar, la imagen se
-        # desplaza por dentro con las barras de scroll.
+        # The border frames the viewport (not the image): when zooming in, the
+        # image scrolls inside with the scrollbars.
         self._viewport = (
             ui.element("div")
             .classes("w-full overflow-auto border border-gray-300 rounded")
@@ -232,12 +230,12 @@ class DragBoxCropper:
         self._apply_zoom()
 
     def _set_zoom(self, value: float) -> None:
-        """Fija el zoom al intervalo permitido; los controles usan este entry point."""
+        """Set the zoom to the allowed range; the controls use this entry point."""
         self.zoom = max(self.MIN_ZOOM, min(self.MAX_ZOOM, round(value, 2)))
         self._apply_zoom()
 
     def _apply_zoom(self) -> None:
-        """Aplica el zoom por ancho de *layout* y sincroniza los controles."""
+        """Apply the zoom by *layout* width and sync the controls."""
         self._canvas.style(f"width: {int(round(self.zoom * 100))}%")
         self._zoom_label.set_text(f"{int(round(self.zoom * 100))} %")
         self._zoom_out.set_enabled(self.zoom > self.MIN_ZOOM)
@@ -250,7 +248,7 @@ class DragBoxCropper:
         if e.type == "mousedown":
             self.start = self._clamped(e.image_x, e.image_y)
             self.current = self.start
-            # Empezar un arrastre nuevo descarta la caja anterior.
+            # Starting a new drag discards the previous box.
             self.box = None
         elif e.type == "mousemove" and self.start is not None:
             self.current = self._clamped(e.image_x, e.image_y)
@@ -275,10 +273,10 @@ class DragBoxCropper:
         return {"left": left, "top": top, "width": width, "height": height}
 
     def _refresh(self) -> None:
-        """Redibuja el overlay con el recuadro en curso o el último confirmado.
+        """Redraw the overlay with the in-progress box or the last confirmed one.
 
-        Tras ``mouseup`` se conserva ``self.box`` para que la selección siga
-        visible; un ``mousedown`` nuevo la limpia.
+        After ``mouseup`` ``self.box`` is kept so the selection stays visible; a
+        new ``mousedown`` clears it.
         """
         box = self._box() or self.box
         svg = ""

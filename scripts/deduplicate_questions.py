@@ -1,23 +1,23 @@
 #!/usr/bin/env python3
-"""Deduplicación semántica de preguntas ya almacenadas (migración puntual).
+"""Semantic deduplication of already-stored questions (one-off migration).
 
-Este script:
+This script:
 
-1. genera el embedding de cada pregunta que aún no lo tenga (con
-   ``LLM_EMBEDDING_MODEL``) y lo persiste en ``questions.embedding_json``;
-2. calcula la similitud coseno entre todas las preguntas del mismo curso;
-3. para cada par cuya similitud supere el umbral, consulta (opcionalmente) al
-   juez LLM para confirmar que son matemáticamente la misma pregunta;
-4. fusiona los duplicados confirmados: conserva la pregunta más antigua, añade
-   los ``source_reference`` y prerrequisitos de la nueva y elimina la fila
-   redundante.
+1. generates the embedding of every question that does not have one yet (with
+   ``LLM_EMBEDDING_MODEL``) and persists it in ``questions.embedding_json``;
+2. computes the cosine similarity between all questions of the same course;
+3. for each pair whose similarity exceeds the threshold, optionally asks the
+   LLM judge to confirm that they are mathematically the same question;
+4. merges the confirmed duplicates: keeps the oldest question, adds the new
+   one's ``source_reference`` and prerequisites, and deletes the redundant row.
 
-Nunca se descartan soluciones ni respuestas correctas (la base no las contiene).
+No solutions or correct answers are ever discarded (the database does not
+contain them).
 
-Uso:
+Usage:
 
-    uv run python scripts/deduplicate_questions.py --db /ruta/a/taygeta.db
-    uv run python scripts/deduplicate_questions.py --db /ruta/a/taygeta.db --dry-run
+    uv run python scripts/deduplicate_questions.py --db /path/to/taygeta.db
+    uv run python scripts/deduplicate_questions.py --db /path/to/taygeta.db --dry-run
     uv run python scripts/deduplicate_questions.py --threshold 0.95 --no-judge --db taygeta.db
 """
 
@@ -38,19 +38,19 @@ logger = logging.getLogger("deduplicate_questions")
 
 
 def _resolve_db_path(explicit: str | None) -> str:
-    """Resuelve la ruta de la base de datos: argumento explícito o configuración."""
+    """Resolve the database path: explicit argument or configuration."""
     if explicit:
         return explicit
     try:
         from taygeta.core.settings import get_settings
 
         return get_settings().database_path
-    except Exception:  # pragma: no cover - sin configuración disponible
+    except Exception:  # pragma: no cover - no configuration available
         return "/app/data/taygeta.db"
 
 
 def _load_questions(database: Database) -> list[EnrichedQuestion]:
-    """Carga todas las preguntas de la base, ordenadas por fecha de creación."""
+    """Load all questions from the database, sorted by creation date."""
     questions: list[EnrichedQuestion] = []
     for question_id in database.list_question_ids():
         question = database.get_question(question_id)
@@ -61,7 +61,7 @@ def _load_questions(database: Database) -> list[EnrichedQuestion]:
 
 
 def backfill_embeddings(database: Database, embedder: Embedder, *, dry_run: bool = False) -> int:
-    """Genera y persiste los embeddings que falten. Devuelve cuántos creó."""
+    """Generate and persist the missing embeddings. Returns how many it created."""
     questions = _load_questions(database)
     missing = [q for q in questions if not database.get_embedding(q.id)]
     if not missing:
@@ -70,14 +70,14 @@ def backfill_embeddings(database: Database, embedder: Embedder, *, dry_run: bool
     texts = [question_embedding_text(q) for q in missing]
     try:
         vectors = embedder.embed_many(texts)
-    except Exception as exc:  # noqa: BLE001 - la migración no debe abortar por el proveedor
-        logger.warning("no se pudieron generar embeddings por lotes: %s", exc)
+    except Exception as exc:  # noqa: BLE001 - the migration must not abort because of the provider
+        logger.warning("could not generate embeddings in bulk: %s", exc)
         vectors = []
         for text in texts:
             try:
                 vectors.append(embedder.embed(text))
-            except Exception as item_exc:  # noqa: BLE001 - degrada por elemento
-                logger.warning("embedding individual omitido: %s", item_exc)
+            except Exception as item_exc:  # noqa: BLE001 - degrades per item
+                logger.warning("individual embedding skipped: %s", item_exc)
                 vectors.append([])
 
     created = 0
@@ -97,9 +97,9 @@ def deduplicate(
     use_judge: bool,
     dry_run: bool = False,
 ) -> int:
-    """Fusiona duplicados semánticos y devuelve cuántos fusionó.
+    """Merge semantic duplicates and return how many it merged.
 
-    Compara dentro del mismo curso y conserva la pregunta más antigua.
+    Compares within the same course and keeps the oldest question.
     """
     service = DeduplicationService(database, threshold=threshold)
     questions = _load_questions(database)
@@ -143,41 +143,41 @@ def _is_confirmed_duplicate(
     other: EnrichedQuestion,
     use_judge: bool,
 ) -> bool:
-    """Confirma (por juez LLM o por umbral) que ``other`` es duplicado de ``question``."""
+    """Confirm (by LLM judge or by threshold) that ``other`` is a duplicate of ``question``."""
     if not use_judge:
         return True
     judgement = service.judge(question, [other])
     if judgement is None:
-        # Juez no disponible o falló: se respeta el umbral de similitud.
+        # Judge unavailable or failed: the similarity threshold is respected.
         return True
     return judgement.is_duplicate and judgement.matching_index == 0
 
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
-        description="Genera embeddings y fusiona preguntas duplicadas semánticamente."
+        description="Generate embeddings and merge semantically duplicated questions."
     )
-    parser.add_argument("--db", default=None, help="Ruta del archivo SQLite.")
+    parser.add_argument("--db", default=None, help="Path to the SQLite file.")
     parser.add_argument(
         "--threshold",
         type=float,
         default=None,
-        help="Umbral de similitud coseno (por defecto DUPLICATE_SIMILARITY_THRESHOLD).",
+        help="Cosine similarity threshold (defaults to DUPLICATE_SIMILARITY_THRESHOLD).",
     )
     parser.add_argument(
         "--no-judge",
         action="store_true",
-        help="No consultar al juez LLM; fusionar solo por umbral de similitud.",
+        help="Do not consult the LLM judge; merge only by similarity threshold.",
     )
     parser.add_argument(
         "--no-backfill",
         action="store_true",
-        help="No generar embeddings para las preguntas que aún no los tienen.",
+        help="Do not generate embeddings for questions that do not have them yet.",
     )
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="Solo informa de las fusiones y embeddings que se harían, sin escribir.",
+        help="Only reports the merges and embeddings that would be performed, without writing.",
     )
     args = parser.parse_args(argv)
 
@@ -191,7 +191,7 @@ def main(argv: list[str] | None = None) -> None:
             else settings.DUPLICATE_SIMILARITY_THRESHOLD
         )
         if not 0.0 <= threshold <= 1.0:
-            print("el umbral debe estar entre 0.0 y 1.0", file=sys.stderr)
+            print("the threshold must be between 0.0 and 1.0", file=sys.stderr)
             raise SystemExit(2)
 
         created = 0
@@ -204,15 +204,15 @@ def main(argv: list[str] | None = None) -> None:
             use_judge=not args.no_judge,
             dry_run=args.dry_run,
         )
-    except Exception as exc:  # noqa: BLE001 - se informa y se sale con error
-        print(f"error al procesar la base de datos {db_path!r}: {exc}", file=sys.stderr)
+    except Exception as exc:  # noqa: BLE001 - reported and exited with an error
+        print(f"error processing the database {db_path!r}: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc
 
-    action = "se harían" if args.dry_run else "se hicieron"
+    dry_run_note = " (dry run)" if args.dry_run else ""
     print(
-        f"{created} embedding(s) generado(s) y {merged} pregunta(s) duplicada(s) "
-        f"fusionada(s) {action} en {db_path} (umbral={threshold}, juez="
-        f"{'no' if args.no_judge else 'sí'})."
+        f"{created} embedding(s) generated and {merged} duplicate question(s) "
+        f"merged in {db_path}{dry_run_note} "
+        f"(threshold={threshold}, judge={'no' if args.no_judge else 'yes'})."
     )
 
 

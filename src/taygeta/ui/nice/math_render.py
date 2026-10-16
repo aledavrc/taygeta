@@ -1,19 +1,19 @@
-"""Previsualización del enunciado con fórmulas TeX (Markdown + KaTeX).
+"""Statement preview with TeX formulas (Markdown + KaTeX).
 
-``ui.markdown`` se apoya en ``markdown2`` y no incluye ningún motor de
-matemáticas; además ``markdown2`` altera las fórmulas antes de que ningún
-renderizador pueda verlas (``$x_1$`` → ``$x<em>1</em>$``, ``\\{`` → ``{``,
-``\\\\`` → ``\\``, ``&`` → ``&amp;``). Por eso el recuadro de formato usa
-``ui.html`` con este renderizador, que:
+``ui.markdown`` relies on ``markdown2`` and includes no math engine; moreover
+``markdown2`` alters the formulas before any renderer can see them (``$x_1$``
+→ ``$x<em>1</em>$``, ``\\{`` → ``{``, ``\\\\`` → ``\\``, ``&`` → ``&amp;``).
+That is why the format box uses ``ui.html`` with this renderer, which:
 
-1. extrae los fragmentos ``$$...$$`` / ``$...$`` y los sustituye por centinelas;
-2. renderiza el Markdown del resto con ``markdown2``;
-3. reinserta los fragmentos intactos (con escape HTML) dentro de ``$...$`` para
-   que KaTeX los procese ya en el navegador.
+1. extracts the ``$$...$$`` / ``$...$`` fragments and replaces them with
+   sentinels;
+2. renders the Markdown of the rest with ``markdown2``;
+3. reinserts the fragments intact (HTML-escaped) inside ``$...$`` so that KaTeX
+   processes them in the browser.
 
-KaTeX se carga una sola vez por página desde un CDN (:func:`install_math_rendering`)
-y un ``MutationObserver`` vuelve a renderizar las fórmulas cada vez que el panel
-actualiza la previsualización.
+KaTeX is loaded once per page from a CDN (:func:`install_math_rendering`) and a
+``MutationObserver`` re-renders the formulas every time the panel updates the
+preview.
 """
 
 from __future__ import annotations
@@ -24,27 +24,27 @@ import re
 import markdown2
 from nicegui import ui
 
-#: Versión de KaTeX servida desde el CDN.
+#: KaTeX version served from the CDN.
 KATEX_VERSION = "0.19.0"
 
-#: URL base de los recursos de KaTeX.
+#: Base URL of the KaTeX resources.
 KATEX_CDN = f"https://cdn.jsdelivr.net/npm/katex@{KATEX_VERSION}/dist"
 
-#: Clase que marca el contenedor cuyas fórmulas debe procesar KaTeX.
+#: Class marking the container whose formulas KaTeX must process.
 MATH_CLASS = "taygeta-math"
 
-#: Centinelas (área de uso privado de Unicode) que marcan dónde va cada fórmula.
+#: Sentinels (Unicode private use area) marking where each formula goes.
 _SENTINEL_OPEN = "\ue000"
 _SENTINEL_CLOSE = "\ue001"
 
-#: Fragmentos ``$$...$$`` (display) o ``$...$`` (inline). La alternativa ``\$\$``
-#: va primero para que ``$$...$$`` no se parta en dos ``$...$``.
+#: ``$$...$$`` (display) or ``$...$`` (inline) fragments. The ``\$\$``
+#: alternative goes first so ``$$...$$`` is not split into two ``$...$``.
 _MATH_RE = re.compile(r"(\$\$.+?\$\$|\$.+?\$)", re.DOTALL)
 
-#: Extensiones de markdown2 equivalentes a las que usa ``ui.markdown``.
+#: markdown2 extensions equivalent to the ones used by ``ui.markdown``.
 _MARKDOWN_EXTRAS = ["fenced-code-blocks", "tables"]
 
-#: Cabecera que carga KaTeX y activa el re-renderizado incremental.
+#: Header that loads KaTeX and enables incremental re-rendering.
 _KATEX_HEAD_HTML = f"""
 <link rel="stylesheet" href="{KATEX_CDN}/katex.min.css" crossorigin="anonymous">
 <script>
@@ -87,21 +87,21 @@ _KATEX_HEAD_HTML = f"""
 
 
 def install_math_rendering() -> None:
-    """Inyecta KaTeX en el ``<head>`` de la página actual.
+    """Inject KaTeX into the current page's ``<head>``.
 
-    Debe llamarse dentro del constructor de una página (``@ui.page``); añade los
-    recursos de KaTeX y el re-renderizado incremental de ``.taygeta-math``.
+    Must be called inside a page constructor (``@ui.page``); it adds the KaTeX
+    resources and the incremental re-rendering of ``.taygeta-math``.
     """
     ui.add_head_html(_KATEX_HEAD_HTML)
 
 
 def render_statement_html(text: str) -> str:
-    """Renderiza el enunciado a HTML protegiendo las fórmulas TeX.
+    """Render the statement to HTML protecting the TeX formulas.
 
-    Las fórmulas se extraen antes de pasar por ``markdown2`` y se reinsertan
-    intactas (con el ``$...$`` original escapado para HTML) para que KaTeX las
-    interprete en el navegador. El HTML resultante debe mostrarse dentro de un
-    contenedor con la clase :data:`MATH_CLASS`.
+    The formulas are extracted before passing through ``markdown2`` and
+    reinserted intact (with the original ``$...$`` escaped for HTML) so KaTeX
+    interprets them in the browser. The resulting HTML must be shown inside a
+    container with the :data:`MATH_CLASS` class.
     """
     if not text:
         return ""

@@ -1,7 +1,7 @@
-"""UI de revisión Human-in-the-Loop en NiceGUI.
+"""Human-in-the-Loop review UI in NiceGUI.
 
-Modelo de estado por eventos (sin reruns): la página se construye una vez por
-sesión y los eventos mutan objetos Python y refrescan los contenedores.
+Event-driven state model (no reruns): the page is built once per session and
+events mutate Python objects and refresh the containers.
 """
 
 from __future__ import annotations
@@ -12,5 +12,5 @@ __all__ = ["caption"]
 
 
 def caption(text: str) -> None:
-    """Equivalente a ``st.caption``: una etiqueta pequeña y gris."""
+    """Equivalent of ``st.caption``: a small, gray label."""
     ui.label(text).classes("text-xs text-gray-500")

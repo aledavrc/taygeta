@@ -1,24 +1,21 @@
-"""Aplicación NiceGUI de revisión Human-in-the-Loop de Taygeta.
+"""Taygeta's NiceGUI Human-in-the-Loop review application.
 
-Modelo de estado por eventos (sin reruns): la página se construye una vez por
-sesión y los manejadores mutan objetos Python que refrescan sus contenedores.
-El flujo es:
+Event-driven state model (no reruns): the page is built once per session and the
+handlers mutate Python objects that refresh their containers. The flow is:
 
-1. subida de PDF/PNG/JPG al directorio ``UPLOADS_DIR``;
-2. procesamiento con el pipeline de doble pase en background
-   (``run.io_bound``, sin bloquear la interfaz);
-3. revisión por pregunta: editor Markdown/TeX con previsualización, taxonomía
-   con comboboxes de curso/tema (catálogo o escritura manual), figuras a la
-   derecha con pestañas «Imagen original» / «Figuras nuevas» y cropper de
-   arrastre, y aprobación explícita antes de persistir en SQLite
-   (``taygeta.db``). Un botón flotante (arriba a la derecha) alterna el modo
-   claro/oscuro y conserva la preferencia entre recargas.
+1. upload of PDF/PNG/JPG to the ``UPLOADS_DIR`` directory;
+2. processing with the two-pass pipeline in the background (``run.io_bound``,
+   without blocking the interface);
+3. per-question review: Markdown/TeX editor with preview, taxonomy with
+   course/topic comboboxes (catalog or manual entry), figures on the right with
+   "Original image" / "New figures" tabs and a drag cropper, and explicit
+   approval before persisting into SQLite (``taygeta.db``). A floating button
+   (top right) toggles light/dark mode and keeps the preference across reloads.
 
-Se ejecuta con ``python -m taygeta.ui.nice`` o con el entry point
-``taygeta-ui``.
+Run with ``python -m taygeta.ui.nice`` or with the ``taygeta-ui`` entry point.
 
-Todo el texto visible se resuelve con :func:`taygeta.i18n.t` (catálogos
-``es``/``en``); las cadenas se mantienen en los catálogos, no en este módulo.
+All visible text is resolved with :func:`taygeta.i18n.t` (``es``/``en``
+catalogs); the strings are kept in the catalogs, not in this module.
 """
 
 from __future__ import annotations
@@ -70,24 +67,24 @@ _SLUG_RE = re.compile(r"^[a-z0-9_]+$")
 
 @functools.lru_cache(maxsize=1)
 def _resources() -> tuple[Settings, Database, ObjectStorage, IngestPipeline]:
-    """Recursos compartidos por todas las sesiones (análogo a ``cache_resource``)."""
+    """Resources shared by all sessions (analogous to ``cache_resource``)."""
     settings = get_settings()
     database = Database(settings=settings)
     storage = ObjectStorage(settings)
     pipeline = IngestPipeline(settings, storage=storage, database=database)
-    # Los nombres de taxonomía se resuelven desde la base de datos.
+    # Taxonomy names are resolved from the database.
     install_taxonomy_names(database)
     return settings, database, storage, pipeline
 
 
 @app.get("/health")
 def _health() -> dict[str, str]:
-    """Healthcheck simple para el orquestador (docker-compose)."""
+    """Simple healthcheck for the orchestrator (docker-compose)."""
     return {"status": "ok"}
 
 
 def _refresh_docs(doc_select: ui.select, settings: Settings) -> None:
-    """Actualiza el selector de documentos con el directorio de uploads."""
+    """Update the document selector with the uploads directory."""
     names = [path.name for path in list_uploads(settings.UPLOADS_DIR)]
     current = doc_select.value
     doc_select.options = names
@@ -97,7 +94,7 @@ def _refresh_docs(doc_select: ui.select, settings: Settings) -> None:
 
 
 def _stat(label: str, value: str) -> None:
-    """Mini-tarjeta de métrica para el resumen de la ingesta."""
+    """Mini metric card for the ingestion summary."""
     with ui.card().classes("w-28 items-center"):
         ui.label(value).classes("text-xl font-bold")
         ui.label(label).classes("text-xs text-gray-500")
@@ -106,11 +103,11 @@ def _stat(label: str, value: str) -> None:
 async def _on_upload(
     e: Any, session: SessionState, doc_select: ui.select, settings: Settings
 ) -> None:
-    """Guarda un archivo subido en ``UPLOADS_DIR`` y refresca el selector."""
+    """Save an uploaded file into ``UPLOADS_DIR`` and refresh the selector."""
     try:
         data = await e.file.read()
         path = save_upload(e.file.name, data, settings.UPLOADS_DIR)
-    except Exception as exc:  # noqa: BLE001 - se informa al usuario, no se oculta
+    except Exception as exc:  # noqa: BLE001 - reported to the user, not hidden
         ui.notify(t("ui.app.upload_failed", error=exc), type="negative")
         return
     _refresh_docs(doc_select, settings)
@@ -124,7 +121,7 @@ def _build_review(
     storage: ObjectStorage,
     pipeline: IngestPipeline,
 ) -> list[QuestionPanel]:
-    """Dibuja el resumen y los paneles de revisión; devuelve los paneles creados."""
+    """Draw the summary and the review panels; return the created panels."""
     result = session.staging
     if result is None:
         return []
@@ -178,7 +175,7 @@ async def _on_process(
     storage: ObjectStorage,
     pipeline: IngestPipeline,
 ) -> None:
-    """Procesa el documento seleccionado y (re)construye la revisión."""
+    """Process the selected document and (re)build the review."""
     if session.processing:
         return
     if not doc_select.value:
@@ -194,7 +191,7 @@ async def _on_process(
     status_label.set_text(t("ui.app.processing", name=path.name))
     try:
         result = await run.io_bound(pipeline.ingest, path, hints=hint_input.value or None)
-    except Exception as exc:  # noqa: BLE001 - se informa al usuario, no se oculta
+    except Exception as exc:  # noqa: BLE001 - reported to the user, not hidden
         session.processing = False
         status_row.set_visibility(False)
         ui.notify(t("ui.app.ingest_error", error=exc), type="negative")
@@ -220,11 +217,11 @@ def _confirm(
     storage: ObjectStorage,
     pipeline: IngestPipeline,
 ) -> None:
-    """Recoge los paneles aprobados y persiste las preguntas en SQLite.
+    """Collect the approved panels and persist the questions into SQLite.
 
-    Revalida los slugs de curso/tema y purga los assets huérfanos de las
-    preguntas efectivamente confirmadas (nunca borra figuras de preguntas no
-    confirmadas).
+    Revalidates the course/topic slugs and purges the orphan assets of the
+    effectively confirmed questions (never deletes figures of unconfirmed
+    questions).
     """
     result = session.staging
     if result is None:
@@ -236,7 +233,7 @@ def _confirm(
         if draft is None:
             continue
         _drafts.append(draft)
-        if not draft.approved or draft.colgantes:
+        if not draft.approved or draft.dangling:
             continue
         approved_question = build_enriched_question(
             draft.base,
@@ -248,7 +245,7 @@ def _confirm(
             source_metadata={"source_reference": result.source_reference},
             figures=[FigureReference.model_validate(figure) for figure in draft.effective_figures],
         )
-        # Reflejar la edición manual (sanitiza delimitadores TeX no estándar).
+        # Reflect the manual edit (sanitizes non-standard TeX delimiters).
         approved_question = approved_question.model_copy(
             update={
                 "statement_raw": sanitize_math_delimiters(draft.statement),
@@ -302,7 +299,7 @@ def _confirm(
 
 
 def _purge_orphans(session: SessionState, confirmed_ids: set[str], storage: ObjectStorage) -> None:
-    """Borra los assets huérfanos de las preguntas efectivamente confirmadas."""
+    """Delete the orphan assets of the effectively confirmed questions."""
     for question_id in confirmed_ids:
         for asset_path in session.orphans.get(str(question_id), set()):
             delete_asset(storage, asset_path)
@@ -310,10 +307,10 @@ def _purge_orphans(session: SessionState, confirmed_ids: set[str], storage: Obje
 
 
 def _dark_mode_toggle() -> None:
-    """Botón flotante (esquina superior derecha) que alterna modo claro/oscuro.
+    """Floating button (top-right corner) that toggles light/dark mode.
 
-    El estado se guarda en ``app.storage.user`` (cookie de sesión) para
-    conservarlo entre recargas. Requiere ``storage_secret`` en ``ui.run``.
+    The state is stored in ``app.storage.user`` (session cookie) to keep it
+    across reloads. Requires ``storage_secret`` in ``ui.run``.
     """
     stored = bool(app.storage.user.get("dark_mode", False))
     dark = ui.dark_mode(value=stored)
@@ -328,7 +325,7 @@ def _dark_mode_toggle() -> None:
         .classes("fixed top-4 right-4 z-50")
         .props("round flat color=primary")
     )
-    button.mark("toggle-modo-oscuro")
+    button.mark("toggle-dark-mode")
     button.tooltip(t("ui.dark_mode.tooltip"))
 
 
@@ -337,18 +334,18 @@ def _index_page() -> None:
     settings, database, storage, pipeline = _resources()
     session = register(ui.context.client.id)
     ui.page_title(t("ui.page.title"))
-    # Carga KaTeX (recuadro de formato del enunciado) en el <head> de la página.
+    # Load KaTeX (statement format box) into the page's <head>.
     install_math_rendering()
     _dark_mode_toggle()
     language_switcher()
     install_ui_language(get_locale())
 
-    # Contenedor amplio: en pantallas anchas se aprovecha el espacio disponible
-    # (hasta 1800 px) con poco margen lateral, en lugar del antiguo max-w-7xl.
+    # Wide container: on wide screens it uses the available space
+    # (up to 1800 px) with little side margin, instead of the old max-w-7xl.
     with ui.column().classes("w-full max-w-[1800px] mx-auto gap-2 px-2 py-4"):
         ui.label(t("ui.app.heading")).classes("text-2xl font-bold")
 
-        # --- Estado y taxonomía ----------------------------------------
+        # --- Status and taxonomy ----------------------------------------
         with ui.expansion(t("ui.status.title")):
             try:
                 status = database.status()
@@ -383,7 +380,7 @@ def _index_page() -> None:
                     )
                 )
 
-        # --- 1. Subida ---------------------------------------------------
+        # --- 1. Upload ---------------------------------------------------
         ui.label(t("ui.app.section.upload")).classes("text-lg font-semibold")
         ui.upload(
             label=t("ui.app.upload_label"),
@@ -391,7 +388,7 @@ def _index_page() -> None:
             on_upload=lambda e: _on_upload(e, session, doc_select, settings),
         )
 
-        # --- 2. Procesar -------------------------------------------------
+        # --- 2. Process --------------------------------------------------
         ui.label(t("ui.app.section.process")).classes("text-lg font-semibold")
         with ui.row().classes("w-full gap-4 items-center"):
             doc_select = ui.select([], label=t("ui.app.doc_select")).classes(
@@ -420,7 +417,7 @@ def _index_page() -> None:
         )
         _refresh_docs(doc_select, settings)
 
-        # --- 3. Revisión y confirmación ----------------------------------
+        # --- 3. Review and confirmation ----------------------------------
         ui.label(t("ui.app.section.review")).classes("text-lg font-semibold")
         review = ui.column().classes("w-full gap-4")
         if session.staging is not None:
@@ -429,7 +426,7 @@ def _index_page() -> None:
 
 
 def main() -> None:
-    """Arranca el servidor NiceGUI de la revisión HITL."""
+    """Start the NiceGUI HITL review server."""
     settings = get_settings()
     host = os.getenv("TAYGETA_UI_HOST", "0.0.0.0")
     port = int(os.getenv("TAYGETA_UI_PORT", "8501"))
@@ -440,7 +437,7 @@ def main() -> None:
         show=False,
         reload=False,
         language=quasar_locale(settings.UI_LANGUAGE),
-        # Necesario para app.storage.user (persistencia del modo oscuro).
+        # Needed for app.storage.user (dark-mode persistence).
         storage_secret=os.getenv("TAYGETA_UI_STORAGE_SECRET", "taygeta-hitl-local"),
     )
 

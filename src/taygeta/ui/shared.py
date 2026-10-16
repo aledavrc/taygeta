@@ -1,15 +1,15 @@
-"""Helpers compartidos por la UI HITL de Taygeta (independientes del framework).
+"""Helpers shared by Taygeta's HITL UI (framework-agnostic).
 
-Concentra la lógica reutilizable de la UI:
+Centralizes the reusable UI logic:
 
-* subida/guardado de documentos y listado del directorio de subidas;
-* rasterización de páginas y recuperación de figuras desde SeaweedFS;
-* composición de URLs públicas (endpoints interno/público de S3);
-* construcción de :class:`EnrichedQuestion` a partir de los campos revisados
-  y persistencia de preguntas aprobadas (``persist_approved_questions``).
+* uploading/saving documents and listing the uploads directory;
+* page rasterization and figure retrieval from SeaweedFS;
+* composition of public URLs (internal/public S3 endpoints);
+* building an :class:`EnrichedQuestion` from the reviewed fields and persisting
+  approved questions (``persist_approved_questions``).
 
-Este módulo no importa NiceGUI, por lo que es unit-testable y reutilizable
-desde cualquier capa.
+This module does not import NiceGUI, so it is unit-testable and reusable from
+any layer.
 """
 
 from __future__ import annotations
@@ -66,32 +66,32 @@ __all__ = [
     "slug_split",
 ]
 
-#: Alias locales de los helpers compartidos de ``taygeta.core.schema``.
+#: Local aliases of the shared helpers from ``taygeta.core.schema``.
 _slugify = slugify
 _normalize_slug = normalize_slug
 
 
 def slug_split(text: str | None) -> list[str]:
-    """Divide una cadena separada por comas en slugs normalizados (sin vacíos)."""
+    """Split a comma-separated string into normalized slugs (no empties)."""
     if not text:
         return []
     return [slug for slug in (_slugify(part) for part in text.split(",")) if slug]
 
 
 # ---------------------------------------------------------------------------
-# Utilidades de archivos y figuras (testables sin framework)
+# File and figure utilities (framework-testable)
 # ---------------------------------------------------------------------------
 
 
 def sanitize_upload_name(name: str) -> str:
-    """Sanea el nombre de un archivo subido, evitando traversal y caracteres raros."""
+    """Sanitize an uploaded file name, avoiding traversal and odd characters."""
     base = Path(name).name
     cleaned = re.sub(r"[^A-Za-z0-9._-]", "_", base).lstrip(".")
     return cleaned or "upload"
 
 
 def save_upload(name: str, data: bytes, uploads_dir: str | Path) -> Path:
-    """Guarda los bytes subidos en ``uploads_dir`` y devuelve la ruta final."""
+    """Save the uploaded bytes into ``uploads_dir`` and return the final path."""
     directory = Path(uploads_dir)
     directory.mkdir(parents=True, exist_ok=True)
     destination = directory / sanitize_upload_name(name)
@@ -102,7 +102,7 @@ def save_upload(name: str, data: bytes, uploads_dir: str | Path) -> Path:
 
 
 def list_uploads(uploads_dir: str | Path) -> list[Path]:
-    """Lista los documentos admitidos presentes en ``uploads_dir``."""
+    """List the supported documents present in ``uploads_dir``."""
     directory = Path(uploads_dir)
     if not directory.is_dir():
         return []
@@ -114,10 +114,10 @@ def list_uploads(uploads_dir: str | Path) -> list[Path]:
 
 
 def figure_bytes(storage: ObjectStorage | None, asset_path: str | None) -> bytes | None:
-    """Recupera los bytes de una figura desde SeaweedFS a partir de su referencia.
+    """Retrieve a figure's bytes from SeaweedFS from its reference.
 
-    Acepta ``/buckets/{bucket}/{key}``, ``s3://bucket/key`` o una clave de objeto.
-    Devuelve ``None`` si la referencia está vacía o el objeto no se puede recuperar.
+    Accepts ``/buckets/{bucket}/{key}``, ``s3://bucket/key`` or an object key.
+    Returns ``None`` if the reference is empty or the object cannot be retrieved.
     """
     if storage is None or not asset_path:
         return None
@@ -127,12 +127,12 @@ def figure_bytes(storage: ObjectStorage | None, asset_path: str | None) -> bytes
             return storage.get_bytes(key, bucket=bucket)
         return storage.get_bytes(key)
     except (ObjectStorageError, ValueError) as exc:
-        logger.warning("no se pudo recuperar la figura %s: %s", asset_path, exc)
+        logger.warning("could not retrieve figure %s: %s", asset_path, exc)
         return None
 
 
 def page_image_bytes(source_path: str | Path, page_index: int, *, dpi: int = 150) -> bytes | None:
-    """Rasteriza una página del documento origen para mostrarla en la revisión."""
+    """Rasterize a page of the source document to show it during review."""
     try:
         with open_document(source_path) as document:
             if page_index < 0 or page_index >= document.page_count:
@@ -140,19 +140,19 @@ def page_image_bytes(source_path: str | Path, page_index: int, *, dpi: int = 150
             page = document.load_page(page_index)
             is_pdf = bool(getattr(document, "is_pdf", False))
             return rasterize_page(page, dpi=dpi, is_pdf=is_pdf).png_bytes
-    except Exception as exc:  # noqa: BLE001 - la vista previa nunca debe romper la UI
-        logger.warning("no se pudo rasterizar la página %s: %s", page_index, exc)
+    except Exception as exc:  # noqa: BLE001 - the preview must never break the UI
+        logger.warning("could not rasterize page %s: %s", page_index, exc)
         return None
 
 
 def page_image_raster(
     source_path: str | Path, page_index: int, *, dpi: int = 150
 ) -> PageRaster | None:
-    """Devuelve la ``PageRaster`` de una página para el cropper (bytes + tamaño).
+    """Return a page's ``PageRaster`` for the cropper (bytes + size).
 
-    ``PageRaster`` expone ``png_bytes`` y ``width_px``/``height_px``, que se
-    necesitan tanto para alimentar el recorte manual como para convertir el
-    recuadro de píxeles a la BBox normalizada.
+    ``PageRaster`` exposes ``png_bytes`` and ``width_px``/``height_px``, which
+    are needed both to feed the manual crop and to convert the pixel box into
+    the normalized BBox.
     """
     try:
         with open_document(source_path) as document:
@@ -161,44 +161,44 @@ def page_image_raster(
             page = document.load_page(page_index)
             is_pdf = bool(getattr(document, "is_pdf", False))
             return rasterize_page(page, dpi=dpi, is_pdf=is_pdf)
-    except Exception as exc:  # noqa: BLE001 - la vista previa nunca debe romper la UI
-        logger.warning("no se pudo rasterizar la página %s: %s", page_index, exc)
+    except Exception as exc:  # noqa: BLE001 - the preview must never break the UI
+        logger.warning("could not rasterize page %s: %s", page_index, exc)
         return None
 
 
 def document_page_count(source_path: str | Path | None) -> int | None:
-    """Devuelve el número de páginas del documento origen, o ``None`` si es inaccesible.
+    """Return the page count of the source document, or ``None`` if unreachable.
 
-    Se usa para ofrecer el selector de página del recorte manual de figuras.
+    Used to offer the page selector for manually cropping figures.
     """
     if source_path is None:
         return None
     try:
         with open_document(source_path) as document:
             return document.page_count
-    except Exception as exc:  # noqa: BLE001 - la UI nunca debe romper por el origen
-        logger.warning("no se pudo contar las páginas de %s: %s", source_path, exc)
+    except Exception as exc:  # noqa: BLE001 - the UI must never break because of the source
+        logger.warning("could not count pages of %s: %s", source_path, exc)
         return None
 
 
 def delete_asset(storage: ObjectStorage | None, asset_path: str) -> None:
-    """Borra un asset por su referencia estable (best-effort, nunca bloquea)."""
+    """Delete an asset by its stable reference (best-effort, never blocks)."""
     if storage is None:
         return
     try:
         bucket, key = split_asset_reference(asset_path, default_bucket=storage.bucket)
         storage.delete(key, bucket=bucket or None)
     except (ObjectStorageError, ValueError) as exc:
-        logger.warning("no se pudo purgar el asset huérfano %s: %s", asset_path, exc)
+        logger.warning("could not purge orphan asset %s: %s", asset_path, exc)
 
 
 def public_s3_url(url: str | None, settings: Any) -> str:
-    """Reescribe el endpoint interno de S3 por el público de la UI.
+    """Rewrite the internal S3 endpoint with the UI's public one.
 
-    Sustituye el prefijo ``S3_ENDPOINT_URL`` (p. ej. ``http://seaweedfs-s3:8333``)
-    por ``S3_PUBLIC_ENDPOINT`` (p. ej. ``http://localhost:8333``) para poder abrir
-    enlaces e imágenes desde el navegador del host. Si no hay endpoint público o
-    la URL no usa el interno, se devuelve sin cambios.
+    Replaces the ``S3_ENDPOINT_URL`` prefix (e.g. ``http://seaweedfs-s3:8333``)
+    with ``S3_PUBLIC_ENDPOINT`` (e.g. ``http://localhost:8333``) so links and
+    images can be opened from the host browser. If there is no public endpoint
+    or the URL does not use the internal one, it is returned unchanged.
     """
     if not url:
         return ""
@@ -210,12 +210,12 @@ def public_s3_url(url: str | None, settings: Any) -> str:
 
 
 def public_asset_url(asset_path: str | None, settings: Any) -> str:
-    """Compone la URL pública de una figura con ``get_public_url`` de schema.
+    """Compose a figure's public URL with the schema's ``get_public_url``.
 
-    Convierte cualquier referencia de asset (``/buckets/{bucket}/{key}``,
-    ``s3://bucket/key`` o clave relativa) a su ruta relativa canónica y la
-    concatena con ``S3_PUBLIC_BASE_URL``. Así la UI renderiza imágenes con la URL
-    pública del host, nunca con URLs internas de Docker (p. ej.
+    Converts any asset reference (``/buckets/{bucket}/{key}``,
+    ``s3://bucket/key`` or a relative key) into its canonical relative path and
+    concatenates it with ``S3_PUBLIC_BASE_URL``. This way the UI renders images
+    with the host's public URL, never with internal Docker URLs (e.g.
     ``http://seaweedfs-s3:8333``).
     """
     if not asset_path:
@@ -229,11 +229,11 @@ def public_asset_url(asset_path: str | None, settings: Any) -> str:
 
 
 def cache_busted_public_url(asset_path: str | None, settings: Any, seed: Any = "") -> str:
-    """URL pública de una figura con parámetro de versión anti-caché.
+    """Public URL of a figure with an anti-cache version parameter.
 
-    La vista previa lee los bytes directamente de SeaweedFS (sin caché de
-    navegador); el enlace externo añade ``?v=`` derivado del asset y de la BBox
-    para que el navegador no sirva una versión antigua tras un recorte.
+    The preview reads the bytes directly from SeaweedFS (no browser cache); the
+    external link appends ``?v=`` derived from the asset and the BBox so the
+    browser does not serve a stale version after a re-crop.
     """
     url = public_asset_url(asset_path, settings)
     if not url:
@@ -244,7 +244,7 @@ def cache_busted_public_url(asset_path: str | None, settings: Any, seed: Any = "
 
 
 # ---------------------------------------------------------------------------
-# Construcción y persistencia de preguntas aprobadas
+# Building and persisting approved questions
 # ---------------------------------------------------------------------------
 
 
@@ -259,16 +259,16 @@ def build_enriched_question(
     source_metadata: dict[str, Any] | None = None,
     figures: Sequence[FigureReference] | None = None,
 ) -> EnrichedQuestion:
-    """Compone una :class:`EnrichedQuestion` a partir de los campos revisados.
+    """Build an :class:`EnrichedQuestion` from the reviewed fields.
 
-    Los valores editados manualmente prevalecen sobre la transcripción
-    automática. ``course``, ``topic`` y ``subtopic`` se normalizan a slugs
-    válidos (``^[a-z0-9_]+$``) para evitar ``ValidationError``; si ``course`` o
-    ``topic`` quedan vacíos se usa ``"general"`` y el ``subtopic`` vacío se
-    convierte en ``None``. Los prerrequisitos se normalizan igual y se descartan
-    los que queden vacíos. ``figures`` permite sustituir las figuras de
-    ``base.figures`` con la selección editada en la revisión (borrados y
-    recortes); si se omite, se conservan las originales.
+    Manually edited values take precedence over the automatic transcription.
+    ``course``, ``topic`` and ``subtopic`` are normalized to valid slugs
+    (``^[a-z0-9_]+$``) to avoid ``ValidationError``; if ``course`` or ``topic``
+    are left empty, ``"general"`` is used, and an empty ``subtopic`` becomes
+    ``None``. Prerequisites are normalized the same way and empty ones are
+    dropped. ``figures`` allows replacing ``base.figures`` with the selection
+    edited during review (deletions and re-crops); if omitted, the originals are
+    kept.
     """
     return EnrichedQuestion(
         id=base.id,
@@ -289,7 +289,7 @@ def build_enriched_question(
 
 @dataclass(slots=True)
 class ConfirmResult:
-    """Resultado de la confirmación y persistencia de preguntas."""
+    """Result of confirming and persisting questions."""
 
     saved: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
@@ -329,14 +329,14 @@ def persist_approved_questions(
     embedder: Embedder | None = None,
     translations: TranslationService | None = None,
 ) -> ConfirmResult:
-    """Persiste las preguntas aprobadas tras verificar sus figuras en el bucket.
+    """Persist the approved questions after verifying their figures in the bucket.
 
-    Usa ``upsert_question`` para que la confirmación sea idempotente. Solo marca
-    la sesión de staging como ``CONFIRMED`` cuando ha guardado alguna pregunta.
-    Genera (best-effort) el embedding de cada pregunta para la deduplicación
-    semántica posterior; si el proveedor no está disponible, se omite sin
-    bloquear la confirmación. Con ``translations`` genera y almacena además las
-    copias es/en, reportando cualquier problema como advertencia.
+    Uses ``upsert_question`` so confirmation is idempotent. It only marks the
+    staging session as ``CONFIRMED`` when it has saved at least one question.
+    Generates (best-effort) each question's embedding for later semantic
+    deduplication; if the provider is unavailable, it is skipped without
+    blocking confirmation. With ``translations`` it also generates and stores
+    the es/en copies, reporting any problem as a warning.
     """
     if embedder is None:
         embedder = Embedder(get_settings())
@@ -358,7 +358,7 @@ def persist_approved_questions(
             result.saved.append(question.id)
             if translations is not None:
                 result.warnings.extend(translations.store(question).problems)
-        except Exception as exc:  # noqa: BLE001 - se informa al usuario, no se oculta
+        except Exception as exc:  # noqa: BLE001 - reported to the user, not hidden
             result.errors.append(f"{question.id}: {exc}")
 
     if session_id and result.saved:
@@ -370,9 +370,9 @@ def persist_approved_questions(
 
 
 def _embed_or_none(embedder: Embedder, question: EnrichedQuestion) -> list[float] | None:
-    """Genera el embedding de una pregunta sin elevar ante fallos del proveedor."""
+    """Generate a question's embedding without raising on provider failures."""
     try:
         return embedder.embed(question_embedding_text(question))
-    except Exception:  # noqa: BLE001 - la deduplicación semántica es opcional
-        logger.warning("no se pudo generar el embedding de la pregunta %s", question.id)
+    except Exception:  # noqa: BLE001 - semantic deduplication is optional
+        logger.warning("could not generate the embedding for question %s", question.id)
         return None

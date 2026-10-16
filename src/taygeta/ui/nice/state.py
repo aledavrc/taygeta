@@ -1,10 +1,10 @@
-"""Estado de sesión de la UI NiceGUI (aislado por cliente del navegador).
+"""NiceGUI UI session state (isolated per browser client).
 
-NiceGUI no tiene un modelo de rerun: la página se construye una vez por sesión
-y los eventos mutan objetos Python que refrescan los contenedores. Este módulo
-mantiene un registro por ``client.id`` para que un recambio de página (al
-volver a cargar la URL, p. ej.) no pierda el staging en curso; los estados se
-liberan al desconectarse el cliente (ver ``app.on_disconnect`` en ``app.py``).
+NiceGUI has no rerun model: the page is built once per session and events
+mutate Python objects that refresh the containers. This module keeps a
+per-``client.id`` registry so a page swap (e.g. after reloading the URL) does
+not lose the staging in progress; the states are released when the client
+disconnects (see ``app.on_disconnect`` in ``app.py``).
 """
 
 from __future__ import annotations
@@ -17,11 +17,11 @@ from taygeta.ingest.pipeline import StagingResult
 
 @dataclass
 class QuestionState:
-    """Estado de la revisión de una pregunta (figuras editadas, vistas…).
+    """Review state of a single question (edited figures, views…).
 
-    ``figures`` es la fuente de verdad durante la revisión: refleja los
-    borrados, recortes y altas que el usuario hace sobre las figuras
-    estructuradas por el pipeline.
+    ``figures`` is the source of truth during review: it reflects the
+    deletions, re-crops and additions the user makes over the figures
+    structured by the pipeline.
     """
 
     figures: list[dict[str, Any]] = field(default_factory=list)
@@ -29,12 +29,12 @@ class QuestionState:
 
 @dataclass
 class SessionState:
-    """Estado vivo de una sesión de revisión (por cliente del navegador)."""
+    """Live state of a review session (per browser client)."""
 
     processed_path: str | None = None
     staging: StagingResult | None = None
     questions: dict[int, QuestionState] = field(default_factory=dict)
-    #: Assets de figuras huérfanas (borradas o sin placeholder) pendientes de purga.
+    #: Assets of orphan figures (deleted or without placeholder) pending purge.
     orphans: dict[str, set[str]] = field(default_factory=dict)
     processing: bool = False
 
@@ -43,10 +43,10 @@ _sessions: dict[str, SessionState] = {}
 
 
 def register(client_id: str) -> SessionState:
-    """Devuelve (creándolo si no existe) el estado de sesión del cliente."""
+    """Return (creating it if missing) the session state of the client."""
     return _sessions.setdefault(client_id, SessionState())
 
 
 def drop(client_id: str) -> None:
-    """Libera el estado de una sesión al desconectarse su cliente."""
+    """Release a session's state when its client disconnects."""
     _sessions.pop(client_id, None)

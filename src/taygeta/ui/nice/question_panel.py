@@ -1,27 +1,26 @@
-"""Panel de revisión de una pregunta en la UI NiceGUI.
+"""Review panel for a single question in the NiceGUI UI.
 
-Modelo de estado por eventos: la página se construye una vez por sesión y los
-eventos mutan el estado (``QuestionState``) y refrescan los contenedores, sin
-reruns.
+Event-driven state model: the page is built once per session and events mutate
+the state (``QuestionState``) and refresh the containers, with no reruns.
 
-El panel contiene:
+The panel contains:
 
-* editor Markdown/TeX con previsualización enlazada que renderiza las fórmulas
-  con KaTeX (``ui.html`` + ``math_render``), no con ``ui.markdown`` (que no
-  soporta TeX y además lo destroza con markdown2);
-* tipo de pregunta y editor de alternativas (solo ``multiple_choice``);
-* taxonomía con comboboxes nativos de curso/tema (``ui.select`` con
-  ``new_value_mode="add-unique"``: elegir del catálogo o escribir un slug
-  nuevo), subtema, dificultad y prerrequisitos;
-* opciones avanzadas: contexto correctivo y reanálisis del enunciado (``refine``)
-  que re-escribe los controles del panel con la respuesta del LLM;
-* figuras a la derecha con pestañas «Imagen original» / «Figuras nuevas»,
-  borrado, recorte manual y alta de falsos negativos con el cropper de arrastre;
-  la numeración de páginas mostrada empieza en 1 (el índice interno es 0);
-* checkbox de aprobación que bloquea la persistencia si el enunciado deja
-  placeholders colgantes.
+* Markdown/TeX editor with a linked preview that renders the formulas with
+  KaTeX (``ui.html`` + ``math_render``), not with ``ui.markdown`` (which does
+  not support TeX and moreover destroys it with markdown2);
+* question type and choices editor (only ``multiple_choice``);
+* taxonomy with native course/topic comboboxes (``ui.select`` with
+  ``new_value_mode="add-unique"``: pick from the catalog or type a new slug),
+  subtopic, difficulty and prerequisites;
+* advanced options: corrective context and statement re-analysis (``refine``)
+  that rewrites the panel controls with the LLM response;
+* figures on the right with "Original image" / "New figures" tabs, deletion,
+  manual crop and addition of false negatives with the drag cropper; the
+  displayed page numbering starts at 1 (the internal index is 0);
+* approval checkbox that blocks persistence if the statement leaves dangling
+  placeholders.
 
-El texto visible se resuelve con :func:`taygeta.i18n.t` (catálogos ``es``/``en``).
+Visible text is resolved with :func:`taygeta.i18n.t` (``es``/``en`` catalogs).
 """
 
 from __future__ import annotations
@@ -71,12 +70,13 @@ QUESTION_TYPES = ["multiple_choice", "open_ended", "true_false", "numerical"]
 
 
 def _taxonomy_defaults(staged: StagedQuestion) -> dict[str, Any]:
-    """Valores por defecto seguros (vía ``getattr``) para la taxonomía.
+    """Safe default values (via ``getattr``) for the taxonomy.
 
-    El objeto en staging es un :class:`EnrichedQuestion` (el estructurador infiere
-    la taxonomía en el pase único), por lo que ``course``, ``topic``, ``subtopic``,
-    ``difficulty`` y ``prerequisites`` ya vienen rellenos. Se accede con
-    ``getattr`` por robustez ante preguntas no estructuradas (``question=None``).
+    The staged object is an :class:`EnrichedQuestion` (the structurer infers the
+    taxonomy in the single pass), so ``course``, ``topic``, ``subtopic``,
+    ``difficulty`` and ``prerequisites`` already come filled in. It is accessed
+    with ``getattr`` for robustness against unstructured questions
+    (``question=None``).
     """
     base = staged.question
     course = getattr(base, "course", "") or ""
@@ -101,7 +101,7 @@ def _taxonomy_defaults(staged: StagedQuestion) -> dict[str, Any]:
 def _register_orphan(
     session: SessionState, question_id: str | None, asset_path: str | None
 ) -> None:
-    """Registra un asset de figura como huérfano para purgarlo al confirmar."""
+    """Register a figure asset as orphan to purge it on confirmation."""
     if not asset_path:
         return
     session.orphans.setdefault(str(question_id or ""), set()).add(asset_path)
@@ -109,7 +109,7 @@ def _register_orphan(
 
 @dataclass(slots=True)
 class PanelDraft:
-    """Recogida de los valores del panel en el momento de confirmar."""
+    """Collection of the panel values at confirmation time."""
 
     base: EnrichedQuestion
     statement: str
@@ -122,12 +122,12 @@ class PanelDraft:
     prerequisites: list[str]
     new_prereqs: list[str]
     effective_figures: list[dict[str, Any]]
-    colgantes: list[str]
+    dangling: list[str]
     approved: bool
 
 
 class QuestionPanel:
-    """Panel de revisión de una pregunta (editor, taxonomía, figuras, aprobación)."""
+    """Review panel for a single question (editor, taxonomy, figures, approval)."""
 
     def __init__(
         self,
@@ -158,10 +158,10 @@ class QuestionPanel:
                 for figure in (self.base.figures or [])
             ]
             session.questions[index] = self.qstate
-        self.view = "Página original"
-        self._colgantes: list[str] = []
+        self.view = "Original page"
+        self._dangling: list[str] = []
 
-        # Referencias a los widgets (para confirmar y para reescribir tras un reanálisis).
+        # References to the widgets (to confirm and to rewrite after a re-analysis).
         self.statement_area: ui.textarea | None = None
         self.preview: ui.html | None = None
         self.qtype_select: ui.select | None = None
@@ -175,7 +175,7 @@ class QuestionPanel:
         self.hint_input: ui.input | None = None
         self.new_prereq_input: ui.input | None = None
         self.approve_box: ui.checkbox | None = None
-        self.colgantes_label: ui.label | None = None
+        self.dangling_label: ui.label | None = None
         self._refine_error: ui.label | None = None
         self._refine_spinner: ui.spinner | None = None
         self.right_body: ui.column | None = None
@@ -184,7 +184,7 @@ class QuestionPanel:
         self._build(parent)
 
     # ------------------------------------------------------------------
-    # Construcción del panel
+    # Panel construction
     # ------------------------------------------------------------------
 
     def _build(self, parent: ui.element) -> None:
@@ -197,9 +197,10 @@ class QuestionPanel:
                 value=staged.status == STATUS_NEEDS_ATTENTION,
             ) as expansion,
         ):
-            # El editor usa ``autogrow`` y, con el panel plegado, Quasar mide su
-            # altura como una sola fila sin recalcularla al desplegarlo; hay que
-            # forzar el recálculo al abrir (ver ``_on_expansion_change``).
+            # The editor uses ``autogrow`` and, with the panel collapsed, Quasar
+            # measures its height as a single row without recalculating it when
+            # expanded; the recalculation must be forced on open (see
+            # ``_on_expansion_change``).
             expansion.on_value_change(self._on_expansion_change)
             if staged.status == STATUS_VALID:
                 ui.label(t("ui.panel.valid")).classes("text-emerald-700")
@@ -214,28 +215,29 @@ class QuestionPanel:
             if base is None:
                 ui.label(t("ui.panel.no_statement"))
                 return
-            # Se usa un grid (no un row) porque ``ui.row`` es ``flex-wrap: wrap``
-            # y las columnas con gap se apilarían al superar el 100% de ancho.
+            # A grid (not a row) is used because ``ui.row`` is
+            # ``flex-wrap: wrap`` and gapped columns would stack once they
+            # exceed 100% width.
             with ui.grid().classes("w-full gap-4 grid-cols-1 lg:grid-cols-2 items-start"):
                 with ui.column().classes("w-full col-span-1 gap-3 min-w-0"):
                     self._build_editor()
                     self._build_taxonomy()
                     self._build_advanced()
-                    self.colgantes_label = ui.label("").classes("text-red-600 text-sm")
-                    self.colgantes_label.set_visibility(False)
+                    self.dangling_label = ui.label("").classes("text-red-600 text-sm")
+                    self.dangling_label.set_visibility(False)
                     self.approve_box = ui.checkbox(
                         t("ui.panel.approve"), value=staged.status == STATUS_VALID
                     )
                     self._sync_status()
                 with ui.column().classes("w-full col-span-1 gap-3 min-w-0"):
                     with ui.tabs(
-                        value="Página original",
+                        value="Original page",
                         on_change=lambda e: self._set_view(e.value),
                     ).classes("w-full"):
-                        ui.tab("Página original", label=t("ui.panel.tab.original"))
-                        ui.tab("Figuras", label=t("ui.panel.tab.figures"))
+                        ui.tab("Original page", label=t("ui.panel.tab.original"))
+                        ui.tab("Figures", label=t("ui.panel.tab.figures"))
                     self.right_body = ui.column().classes("w-full gap-2")
-                    self._set_view("Página original")
+                    self._set_view("Original page")
 
     def _build_editor(self) -> None:
         base = self.base
@@ -267,7 +269,7 @@ class QuestionPanel:
         ui.label(t("ui.panel.metadata")).classes("font-semibold")
 
     def _rebuild_choices(self) -> None:
-        """(Re)construye los editores de alternativas según el tipo seleccionado."""
+        """(Re)build the choice editors according to the selected type."""
         if self.choices_area is None or self.qtype_select is None:
             return
         self.choices_area.clear()
@@ -288,10 +290,10 @@ class QuestionPanel:
                 self.choice_editors.append((choice_id, choice_text))
 
     def _combobox(self, label: str, options: list[str], value: str) -> ui.select:
-        """Combobox de slug: catálogo desplegable + escritura de un valor nuevo.
+        """Slug combobox: dropdown catalog + entry of a new value.
 
-        El valor actual se incluye siempre en las opciones para no romper cuando
-        el catálogo aún está vacío o el valor inferido no está catalogado.
+        The current value is always included in the options so it does not break
+        when the catalog is still empty or the inferred value is not cataloged.
         """
         merged = sorted({*options, value}) if value else list(options)
         return ui.select(
@@ -352,11 +354,11 @@ class QuestionPanel:
             self.new_prereq_input = ui.input(t("ui.panel.new_prereqs")).classes("w-full")
 
     # ------------------------------------------------------------------
-    # Eventos del editor y taxonomía
+    # Editor and taxonomy events
     # ------------------------------------------------------------------
 
     def _render_preview(self, statement: str) -> None:
-        """Re-renderiza la previsualización del enunciado (Markdown + TeX/KaTeX)."""
+        """Re-render the statement preview (Markdown + TeX/KaTeX)."""
         if self.preview is not None:
             self.preview.set_content(render_statement_html(statement or ""))
 
@@ -368,15 +370,15 @@ class QuestionPanel:
         self._sync_status()
 
     def _on_expansion_change(self, e: Any) -> None:
-        """Reajusta la altura del editor al desplegar el panel de la pregunta.
+        """Re-adjust the editor height when expanding the question panel.
 
-        El enunciado se edita en un ``ui.textarea`` con ``autogrow`` dentro de un
-        ``ui.expansion`` que arranca plegado. Quasar mide la altura del
-        ``autogrow`` al montar el componente; con el panel oculto la calcula como
-        una sola fila y no la recalcula al desplegarlo, de modo que el enunciado
-        queda recortado a su primera línea (con ``overflow`` oculto). Al abrir el
-        panel disparamos un evento ``input`` sobre el textarea para que Quasar
-        vuelva a medir su contenido.
+        The statement is edited in a ``ui.textarea`` with ``autogrow`` inside a
+        ``ui.expansion`` that starts collapsed. Quasar measures the ``autogrow``
+        height when mounting the component; with the panel hidden it computes it
+        as a single row and does not recalculate it when expanded, so the
+        statement is clipped to its first line (with hidden ``overflow``). When
+        opening the panel we dispatch an ``input`` event on the textarea so
+        Quasar re-measures its content.
         """
         if not getattr(e, "value", False) or self.statement_area is None:
             return
@@ -395,30 +397,30 @@ class QuestionPanel:
             self.topic_select.update()
 
     def _sync_status(self) -> None:
-        """Reconcilia figuras con el enunciado y actualiza el aviso de colgantes."""
+        """Reconcile figures with the statement and update the dangling warning."""
         if self.statement_area is None:
             return
         statement = self.statement_area.value or ""
-        _efectivas, huerfanas, colgantes = reconcile_figures_with_statement(
+        _effective, orphans, dangling = reconcile_figures_with_statement(
             self.qstate.figures, statement
         )
-        for figure in huerfanas:
+        for figure in orphans:
             _register_orphan(
                 self.session, str(self.base.id) if self.base else None, figure.get("asset_path")
             )
-        self._colgantes = colgantes
-        if self.colgantes_label is None:
+        self._dangling = dangling
+        if self.dangling_label is None:
             return
-        if colgantes:
-            self.colgantes_label.set_text(
-                t("ui.panel.dangling", placeholders=", ".join(sorted(colgantes)))
+        if dangling:
+            self.dangling_label.set_text(
+                t("ui.panel.dangling", placeholders=", ".join(sorted(dangling)))
             )
-            self.colgantes_label.set_visibility(True)
+            self.dangling_label.set_visibility(True)
         else:
-            self.colgantes_label.set_visibility(False)
+            self.dangling_label.set_visibility(False)
 
     # ------------------------------------------------------------------
-    # Figuras (columna derecha)
+    # Figures (right column)
     # ------------------------------------------------------------------
 
     def _set_view(self, view: str) -> None:
@@ -426,19 +428,19 @@ class QuestionPanel:
         if self.right_body is None:
             return
         self.right_body.clear()
-        # Al salir de «Figuras» invalidamos la referencia para que las
-        # actualizaciones (refine, borrado) no intenten redibujar sobre una
-        # vista ya destruida; se reconstruye al volver a la pestaña.
+        # When leaving "Figures" we invalidate the reference so later
+        # updates (refine, deletion) do not try to redraw over an
+        # already-destroyed view; it is rebuilt when returning to the tab.
         self.figures_area = None
         with self.right_body:
-            if view == "Figuras":
+            if view == "Figures":
                 self.figures_area = ui.column().classes("w-full gap-2")
                 self._render_figures()
             else:
                 self._render_original_pages()
 
     def _render_figures(self) -> None:
-        """Dibuja (o redibuja) la lista de figuras y el alta manual."""
+        """Draw (or redraw) the list of figures and the manual addition."""
         if self.figures_area is None:
             return
         self.figures_area.clear()
@@ -507,10 +509,10 @@ class QuestionPanel:
     def _initial_pixel_box(
         figure: dict[str, Any], width: int, height: int
     ) -> dict[str, int] | None:
-        """Caja en píxeles de la BBox actual de la figura, para sembrar el cropper.
+        """Pixel box of the figure's current BBox, to seed the cropper.
 
-        Devuelve el recuadro vigente ``{"left", "top", "width", "height"}`` o
-        ``None`` si la figura no tiene BBox válida para las dimensiones dadas.
+        Returns the current box ``{"left", "top", "width", "height"}`` or
+        ``None`` if the figure has no valid BBox for the given dimensions.
         """
         bbox = figure.get("bbox")
         if not bbox:
@@ -539,7 +541,7 @@ class QuestionPanel:
                     self.source_path,
                     self.storage,
                 )
-            except Exception as exc:  # noqa: BLE001 - se informa al usuario, no se oculta
+            except Exception as exc:  # noqa: BLE001 - reported to the user, not hidden
                 ui.notify(
                     t("ui.panel.figure.crop_failed", figure_id=figure_id, error=exc),
                     type="negative",
@@ -598,8 +600,9 @@ class QuestionPanel:
                     ).props("dense")
 
             page_select.on_value_change(lambda _e: show_cropper())
-            # El cropper se dibuja al abrir la expansión (no en build time) para
-            # no rasterizar una página por cada panel al construir la revisión.
+            # The cropper is drawn when the expansion is opened (not at build
+            # time) so as not to rasterize a page for every panel while building
+            # the review.
             add_exp.on_value_change(lambda e: show_cropper() if e.value else None)
 
     def _add_figure(self, pending: dict[str, Any], dims: dict[str, int]) -> Any:
@@ -619,7 +622,7 @@ class QuestionPanel:
                     source_path=self.source_path,
                     storage=self.storage,
                 )
-            except Exception as exc:  # noqa: BLE001 - se informa al usuario, no se oculta
+            except Exception as exc:  # noqa: BLE001 - reported to the user, not hidden
                 ui.notify(t("ui.panel.figure.add_failed", error=exc), type="negative")
                 return
             self.qstate.figures = figures
@@ -638,7 +641,7 @@ class QuestionPanel:
             figures, statement, removed = remove_figure(
                 self.qstate.figures, self.statement_area.value, figure_id
             )
-        except Exception as exc:  # noqa: BLE001 - se informa al usuario, no se oculta
+        except Exception as exc:  # noqa: BLE001 - reported to the user, not hidden
             ui.notify(t("ui.panel.figure.delete_failed", error=exc), type="negative")
             return
         self.qstate.figures = figures
@@ -669,7 +672,7 @@ class QuestionPanel:
                 caption(t("ui.panel.original.page_failed", number=page_index + 1))
 
     # ------------------------------------------------------------------
-    # Reanálisis del enunciado (refine)
+    # Statement re-analysis (refine)
     # ------------------------------------------------------------------
 
     async def _refine(self) -> None:
@@ -694,7 +697,7 @@ class QuestionPanel:
             refined = await run.io_bound(
                 self.pipeline.refine_question, intermediate, self.base, hints=hint
             )
-        except Exception as exc:  # noqa: BLE001 - se informa al panel, no se oculta
+        except Exception as exc:  # noqa: BLE001 - reported to the panel, not hidden
             if self._refine_error is not None:
                 self._refine_error.set_text(t("ui.panel.refine_failed", error=exc))
                 self._refine_error.set_visibility(True)
@@ -706,7 +709,7 @@ class QuestionPanel:
         self._apply_refine(refined)
 
     def _apply_refine(self, staged: StagedQuestion) -> None:
-        """Reescribe los controles del panel con el resultado del reanálisis."""
+        """Rewrite the panel controls with the re-analysis result."""
         question = staged.question
         if question is None:
             return
@@ -742,11 +745,11 @@ class QuestionPanel:
         self._render_figures()
 
     # ------------------------------------------------------------------
-    # Confirmación
+    # Confirmation
     # ------------------------------------------------------------------
 
     def collect(self) -> PanelDraft | None:
-        """Recoge los valores actuales del panel (o ``None`` si no hay enunciado)."""
+        """Collect the panel's current values (or ``None`` if there is no statement)."""
         base = self.base
         if base is None or self.statement_area is None or self.qtype_select is None:
             return None
@@ -758,10 +761,10 @@ class QuestionPanel:
                 Choice(id=choice_id.value.strip(), content_raw=choice_text.value.strip())
                 for choice_id, choice_text in self.choice_editors
             ]
-        effective, huerfanas, colgantes = reconcile_figures_with_statement(
+        effective, orphans, dangling = reconcile_figures_with_statement(
             self.qstate.figures, statement
         )
-        for figure in huerfanas:
+        for figure in orphans:
             _register_orphan(self.session, str(base.id), figure.get("asset_path"))
         course = str(self.course_select.value or "") if self.course_select is not None else ""
         topic = str(self.topic_select.value or "") if self.topic_select is not None else ""
@@ -790,6 +793,6 @@ class QuestionPanel:
             prerequisites=prerequisites,
             new_prereqs=new_prereqs,
             effective_figures=effective,
-            colgantes=colgantes,
+            dangling=dangling,
             approved=approved,
         )

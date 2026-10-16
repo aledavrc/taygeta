@@ -104,22 +104,22 @@ def test_reconcile_figures_with_statement() -> None:
         {"id": "fig:1", "page": 0, "bbox": [100, 100, 400, 400]},
         {"id": "fig:2", "page": 0, "bbox": [500, 100, 700, 300]},
     ]
-    efectivas, huerfanas, colgantes = reconcile_figures_with_statement(
+    effective, orphans, dangling = reconcile_figures_with_statement(
         figures, "Observa {{fig:1}} y responde."
     )
-    assert [figure["id"] for figure in efectivas] == ["fig:1"]
-    assert [figure["id"] for figure in huerfanas] == ["fig:2"]
-    assert colgantes == []
+    assert [figure["id"] for figure in effective] == ["fig:1"]
+    assert [figure["id"] for figure in orphans] == ["fig:2"]
+    assert dangling == []
 
 
 def test_reconcile_detects_orphan_placeholders() -> None:
     figures = [{"id": "fig:1", "page": 0, "bbox": [100, 100, 400, 400]}]
-    efectivas, huerfanas, colgantes = reconcile_figures_with_statement(
+    effective, orphans, dangling = reconcile_figures_with_statement(
         figures, "Analiza {{fig:1}} y {{fig:2}}."
     )
-    assert len(efectivas) == 1
-    assert huerfanas == []
-    assert colgantes == ["fig:2"]
+    assert len(effective) == 1
+    assert orphans == []
+    assert dangling == ["fig:2"]
 
 
 # ---------------------------------------------------------------------------

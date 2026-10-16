@@ -1,8 +1,8 @@
-"""Interfaz Human-in-the-Loop de Taygeta (NiceGUI).
+"""Taygeta's Human-in-the-Loop interface (NiceGUI).
 
-* ``shared``: helpers framework-agnósticos (uploads, figuras, persistencia).
-* ``figure_editing``: helpers puros de edición de figuras.
-* ``nice``: aplicación NiceGUI de revisión (``taygeta-ui``).
+* ``shared``: framework-agnostic helpers (uploads, figures, persistence).
+* ``figure_editing``: pure figure-editing helpers.
+* ``nice``: NiceGUI review application (``taygeta-ui``).
 """
 
 from __future__ import annotations

@@ -149,7 +149,7 @@ async def test_index_page_builds(ui_env: None, tmp_path: Path) -> None:
         await user.should_see("3. Revisión y confirmación")
 
         # Modo oscuro: el botón flotante alterna el estado del cliente.
-        user.find("toggle-modo-oscuro").click()
+        user.find("toggle-dark-mode").click()
         dark = next(
             element
             for element in user.find(ui.dark_mode).elements

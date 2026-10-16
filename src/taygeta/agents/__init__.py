@@ -1,4 +1,4 @@
-"""Agentes de Taygeta: estructuración (un solo pase) y apoyo a la revisión."""
+"""Taygeta agents: structuring (a single pass) and review support."""
 
 from __future__ import annotations
 

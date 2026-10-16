@@ -142,9 +142,9 @@ class Translator:
                 max_retries=self._max_retries,
             )
         except Exception as exc:  # noqa: BLE001 - provider and schema errors
-            raise TranslationError(f"fallo en la traducción remota: {exc}") from exc
+            raise TranslationError(f"remote translation failed: {exc}") from exc
         if raw is None:
-            raise TranslationError("el LLM remoto no produjo ninguna traducción")
+            raise TranslationError("the remote LLM produced no translation")
         return self._assemble(question, raw)
 
     @staticmethod

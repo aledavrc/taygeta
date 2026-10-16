@@ -1,21 +1,19 @@
-"""Generación 100 % local de embeddings mediante ``sentence-transformers``.
+"""100% local embedding generation via ``sentence-transformers``.
 
-Los embeddings para la deduplicación semántica se calculan con un modelo
-``sentence-transformers`` ejecutado localmente en Python (sin llamadas a un
-servicio externo ni a una API de embeddings en la nube). El identificador del
-modelo se configura con ``LLM_EMBEDDING_MODEL`` (un id de Hugging Face o una
-ruta local) y sus pesos se descargan/cachean la primera vez que se usan, igual
-que ocurre con los pesos del OCR.
+The embeddings for semantic deduplication are computed with a
+``sentence-transformers`` model run locally in Python (no calls to an external
+service or a cloud embedding API). The model identifier is configured with
+``LLM_EMBEDDING_MODEL`` (a Hugging Face id or a local path) and its weights are
+downloaded/cached the first time they are used, just like the OCR weights.
 
-El texto que se vectoriza es el contenido visible del enunciado y sus
-alternativas; nunca incluye soluciones ni respuestas correctas (el esquema no
-las contiene). Los vectores se normalizan (``normalize_embeddings=True``) para
-que la similitud coseno sea directamente el producto escalar.
+The vectorized text is the visible content of the statement and its choices; it
+never includes solutions or correct answers (the schema does not contain them).
+The vectors are normalized (``normalize_embeddings=True``) so that the cosine
+similarity is directly the dot product.
 
-Si el modelo no puede cargarse (sin pesos, sin red la primera vez, etc.),
-:class:`Embedder` eleva :class:`EmbeddingError` y los llamadores deben degradar
-de forma controlada: la deduplicación semántica se desactiva sin bloquear la
-ingesta.
+If the model cannot be loaded (no weights, no network the first time, etc.),
+:class:`Embedder` raises :class:`EmbeddingError` and callers must degrade in a
+controlled way: semantic deduplication is disabled without blocking ingestion.
 """
 
 from __future__ import annotations
@@ -35,14 +33,14 @@ __all__ = ["Embedder", "EmbeddingError", "question_embedding_text"]
 
 
 class EmbeddingError(RuntimeError):
-    """Error controlado al cargar el modelo local o generar embeddings."""
+    """Controlled error when loading the local model or generating embeddings."""
 
 
 def question_embedding_text(question: Any) -> str:
-    """Compone el texto representativo de una pregunta para vectorizarla.
+    """Compose the representative text of a question for vectorization.
 
-    Incluye el enunciado y, si las hay, las alternativas. No incorpora solución
-    ni respuesta correcta: solo el contenido visible de la pregunta.
+    It includes the statement and, if present, the choices. It does not include a
+    solution or correct answer: only the visible content of the question.
     """
     parts = [question.statement_raw]
     for choice in question.choices or []:
@@ -51,11 +49,11 @@ def question_embedding_text(question: Any) -> str:
 
 
 class Embedder:
-    """Generador local de embeddings con ``sentence-transformers``.
+    """Local embedding generator with ``sentence-transformers``.
 
-    El modelo se instancia de forma perezosa en :meth:`model` para no descargar
-    pesos ni importar ``torch``/``sentence_transformers`` hasta que realmente se
-    necesite un vector.
+    The model is instantiated lazily in :meth:`model` so that weights are not
+    downloaded and ``torch``/``sentence_transformers`` are not imported until a
+    vector is actually needed.
     """
 
     def __init__(
@@ -65,13 +63,13 @@ class Embedder:
         model_name: str | None = None,
         model: Any | None = None,
     ) -> None:
-        """Crea el generador de embeddings.
+        """Create the embedding generator.
 
         Args:
-            settings: Configuración a usar; por defecto la global.
-            model_name: Sobrescribe ``LLM_EMBEDDING_MODEL``.
-            model: Instancia ``SentenceTransformer`` ya cargada (inyectable en
-                pruebas para evitar descargar pesos).
+            settings: Configuration to use; the global one by default.
+            model_name: Overrides ``LLM_EMBEDDING_MODEL``.
+            model: An already loaded ``SentenceTransformer`` instance (injectable
+                in tests to avoid downloading weights).
         """
         self.settings = settings or get_settings()
         self._model_name = model_name
@@ -79,16 +77,16 @@ class Embedder:
 
     @property
     def model_name(self) -> str:
-        """Identificador del modelo de embeddings en uso."""
+        """Identifier of the embedding model in use."""
         return self._model_name or self.settings.LLM_EMBEDDING_MODEL
 
     @property
     def model(self) -> SentenceTransformer:
-        """Carga (y cachea) el modelo ``SentenceTransformer`` configurado.
+        """Load (and cache) the configured ``SentenceTransformer`` model.
 
-        La importación y la descarga de pesos se difieren hasta la primera
-        llamada; si el modelo no está disponible, se propaga la excepción
-        subyacente y el llamador debe degradar de forma controlada.
+        The import and the weight download are deferred until the first call; if
+        the model is not available, the underlying exception propagates and the
+        caller must degrade in a controlled way.
         """
         if self._model is None:
             from sentence_transformers import SentenceTransformer
@@ -97,28 +95,28 @@ class Embedder:
         return self._model
 
     def embed(self, text: str) -> list[float]:
-        """Genera el vector de embedding normalizado de un texto.
+        """Generate the normalized embedding vector of a text.
 
         Raises:
-            EmbeddingError: si el modelo no produce un vector.
+            EmbeddingError: if the model does not produce a vector.
         """
         try:
             vector = self.model.encode(text, normalize_embeddings=True)
-        except Exception as exc:  # noqa: BLE001 - fallo del modelo local
-            raise EmbeddingError(f"fallo al generar el embedding: {exc}") from exc
+        except Exception as exc:  # noqa: BLE001 - local model failure
+            raise EmbeddingError(f"failed to generate the embedding: {exc}") from exc
         if vector is None or len(vector) == 0:
-            raise EmbeddingError("el modelo no devolvió ningún vector de embedding")
+            raise EmbeddingError("the model returned no embedding vector")
         return [float(x) for x in vector]
 
     def embed_many(self, texts: Sequence[str]) -> list[list[float]]:
-        """Genera los vectores de embedding de una lista de textos, por lotes.
+        """Generate the embedding vectors of a list of texts, in batches.
 
-        Devuelve una lista del mismo tamaño que ``texts``.
+        Returns a list of the same size as ``texts``.
         """
         if not texts:
             return []
         try:
             vectors = self.model.encode(list(texts), normalize_embeddings=True)
-        except Exception as exc:  # noqa: BLE001 - fallo del modelo local
-            raise EmbeddingError(f"fallo al generar los embeddings: {exc}") from exc
+        except Exception as exc:  # noqa: BLE001 - local model failure
+            raise EmbeddingError(f"failed to generate the embeddings: {exc}") from exc
         return [[float(x) for x in vector] for vector in vectors]

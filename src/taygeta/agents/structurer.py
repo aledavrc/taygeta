@@ -1,21 +1,22 @@
-"""Estructuración de un solo pase (sección 4.3).
+"""Single-pass structuring (section 4.3).
 
-Consolida la transcripción del OCR, el formateo TeX y la clasificación
-curricular en **UNA sola llamada** al LLM remoto (DeepSeek u otro proveedor
-compatible con la API de OpenAI vía ``instructor``). El modelo devuelve, por
-pregunta, en una única respuesta JSON:
+Consolidates the OCR transcription, the TeX formatting and the curricular
+classification into **ONE single call** to the remote LLM (DeepSeek or another
+provider compatible with the OpenAI API via ``instructor``). The model returns,
+per question, in a single JSON response:
 
-* ``statement_raw`` en Markdown/TeX (``$...$``, ``$$...$$``, placeholders ``{{fig:N}}``);
-* ``question_type`` y ``choices``;
-* ``course``, ``topic`` y ``subtopic`` (slugs snake_case);
-* ``difficulty`` (entero 1-5);
-* ``prerequisites`` (lista de slugs).
+* ``statement_raw`` in Markdown/TeX (``$...$``, ``$$...$$``, ``{{fig:N}}`` placeholders);
+* ``question_type`` and ``choices``;
+* ``course``, ``topic`` and ``subtopic`` (snake_case slugs);
+* ``difficulty`` (integer 1-5);
+* ``prerequisites`` (list of slugs).
 
-Los slugs se declaran con el tipo :data:`~taygeta.core.schema.Slug`, que impone
-la regex ``^[a-z0-9_]+$``, y se normalizan (``mode="before"``) para tolerar
-acentos, mayúsculas y separadores del LLM sin romper la validación. El ``id`` y
-la asociación de figuras se asignan localmente de forma determinista. No
-resuelve el ejercicio ni añade soluciones o respuestas correctas.
+The slugs are declared with the :data:`~taygeta.core.schema.Slug` type, which
+imposes the regex ``^[a-z0-9_]+$``, and are normalized (``mode="before"``) to
+tolerate accents, uppercase and separators from the LLM without breaking
+validation. The ``id`` and the figure association are assigned locally in a
+deterministic way. It does not solve the exercise or add solutions or correct
+answers.
 """
 
 from __future__ import annotations
@@ -65,7 +66,7 @@ def _names_suffix(
     parent_slug: str,
     slug: str,
 ) -> str:
-    """Formatea los nombres localizados existentes como sufijo de grounding."""
+    """Format the existing localized names as a grounding suffix."""
     if not names:
         return ""
     entry = names.get((kind, parent_slug, slug))
@@ -79,14 +80,14 @@ def _build_dynamic_curriculum_prompt(
     taxonomy_tree: dict[str, dict[str, list[str]]],
     names: dict[tuple[str, str, str], dict[str, str]] | None = None,
 ) -> str:
-    """Formatea la taxonomía curricular viva como texto de grounding para el LLM.
+    """Format the live curricular taxonomy as grounding text for the LLM.
 
-    Recibe el árbol ``curso -> tema -> subtemas`` reconstruido desde la base de
-    datos y lo convierte en un catálogo legible que el LLM debe reutilizar de
-    forma estricta para canonicalizar ``course``, ``topic`` y ``subtopic``. Si se
-    aportan ``names`` (``(kind, parent_slug, slug) -> {locale: label}``), cada slug
-    se anota con sus nombres localizados ya existentes para que el LLM los
-    reutilice en vez de inventar variantes.
+    Receives the ``course -> topic -> subtopics`` tree rebuilt from the database
+    and turns it into a readable catalog that the LLM must strictly reuse to
+    canonicalize ``course``, ``topic`` and ``subtopic``. If ``names`` is provided
+    (``(kind, parent_slug, slug) -> {locale: label}``), each slug is annotated
+    with its already existing localized names so the LLM reuses them instead of
+    inventing variants.
     """
     header = (
         "CATÁLOGO DE CURSOS Y TEMAS QUE YA EXISTEN EN LA BASE DE DATOS:\n"
@@ -123,12 +124,12 @@ def _build_dynamic_prerequisites_prompt(
     prerequisites: list[str],
     names: dict[tuple[str, str, str], dict[str, str]] | None = None,
 ) -> str:
-    """Formatea el catálogo vivo de prerrequisitos como texto de grounding.
+    """Format the live prerequisite catalog as grounding text.
 
-    Los slugs provienen de la base de datos (tabla ``prerequisites``), de modo
-    que el LLM reutilice el vocabulario ya existente antes de acuñar conceptos
-    nuevos. Si el catálogo está vacío, lo indica explícitamente. Cuando se
-    aportan ``names``, cada slug se anota con sus nombres localizados existentes.
+    The slugs come from the database (``prerequisites`` table), so that the LLM
+    reuses the already existing vocabulary before coining new concepts. If the
+    catalog is empty, it says so explicitly. When ``names`` is provided, each slug
+    is annotated with its existing localized names.
     """
     header = (
         "CATÁLOGO DE PRERREQUISITOS QUE YA EXISTEN EN LA BASE DE DATOS:\n"
@@ -251,25 +252,25 @@ inventes datos que no se deduzcan del enunciado.
 
 
 class LocalizedName(BaseModel):
-    """Nombre legible (es/en) de una entrada de taxonomía emitido por el LLM."""
+    """Human-readable name (es/en) of a taxonomy entry emitted by the LLM."""
 
     model_config = ConfigDict(extra="forbid")
 
-    es: str = Field(..., min_length=1, description="Nombre legible en español.")
-    en: str = Field(..., min_length=1, description="Nombre legible en inglés.")
+    es: str = Field(..., min_length=1, description="Human-readable name in Spanish.")
+    en: str = Field(..., min_length=1, description="Human-readable name in English.")
 
 
 class PrerequisiteName(LocalizedName):
-    """Nombre legible de un prerrequisito, vinculado a su slug."""
+    """Human-readable name of a prerequisite, linked to its slug."""
 
-    slug: str = Field(..., min_length=1, description="Slug del prerrequisito nombrado.")
+    slug: str = Field(..., min_length=1, description="Slug of the named prerequisite.")
 
 
 class QuestionDraft(BaseModel):
-    """Respuesta única del LLM por pregunta: estructura + clasificación curricular.
+    """The LLM's single response per question: structure + curricular classification.
 
-    El ``id`` y la asociación de figuras se asignan localmente, de forma
-    determinista, para no depender de que el modelo genere UUIDs correctos.
+    The ``id`` and the figure association are assigned locally, in a deterministic
+    way, so as not to depend on the model generating correct UUIDs.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -278,24 +279,22 @@ class QuestionDraft(BaseModel):
     question_type: Literal["multiple_choice", "open_ended", "true_false", "numerical"]
     choices: list[Choice] | None = Field(default=None)
     notation_notes: list[str] = Field(default_factory=list)
-    course: Slug = Field(..., description="Slug del curso (regex ^[a-z0-9_]+$).")
-    topic: Slug = Field(..., description="Slug del tema (regex ^[a-z0-9_]+$).")
-    subtopic: Slug | None = Field(default=None, description="Slug del subtema o null.")
-    difficulty: int = Field(..., ge=1, le=5, description="Dificultad estimada 1-5.")
-    prerequisites: list[Slug] = Field(
-        default_factory=list, description="Slugs de conceptos previos."
-    )
+    course: Slug = Field(..., description="Course slug (regex ^[a-z0-9_]+$).")
+    topic: Slug = Field(..., description="Topic slug (regex ^[a-z0-9_]+$).")
+    subtopic: Slug | None = Field(default=None, description="Subtopic slug or null.")
+    difficulty: int = Field(..., ge=1, le=5, description="Estimated difficulty 1-5.")
+    prerequisites: list[Slug] = Field(default_factory=list, description="Slugs of prior concepts.")
     course_name: LocalizedName | None = Field(
-        default=None, description="Nombre legible del curso (es/en)."
+        default=None, description="Human-readable course name (es/en)."
     )
     topic_name: LocalizedName | None = Field(
-        default=None, description="Nombre legible del tema (es/en)."
+        default=None, description="Human-readable topic name (es/en)."
     )
     subtopic_name: LocalizedName | None = Field(
-        default=None, description="Nombre legible del subtema (es/en), o null."
+        default=None, description="Human-readable subtopic name (es/en), or null."
     )
     prerequisite_names: list[PrerequisiteName] = Field(
-        default_factory=list, description="Nombres legibles (es/en) de los prerrequisitos."
+        default_factory=list, description="Human-readable names (es/en) of the prerequisites."
     )
 
     @field_validator("course", "topic", mode="before")
@@ -336,7 +335,7 @@ class QuestionDraft(BaseModel):
 
 @dataclass(slots=True)
 class StructuredQuestion:
-    """Resultado por pregunta del pase único de estructuración."""
+    """Per-question result of the single structuring pass."""
 
     question: EnrichedQuestion | None
     error: str | None = None
@@ -344,11 +343,11 @@ class StructuredQuestion:
 
 
 class StructuringError(RuntimeError):
-    """Error controlado durante la estructuración remota."""
+    """Controlled error during remote structuring."""
 
 
 class Structurer:
-    """Estructura la salida del OCR en ``EnrichedQuestion`` en un único pase."""
+    """Structures the OCR output into ``EnrichedQuestion`` in a single pass."""
 
     def __init__(
         self,
@@ -359,16 +358,16 @@ class Structurer:
         max_retries: int | None = None,
         database: Any | None = None,
     ) -> None:
-        """Crea el estructurador.
+        """Create the structurer.
 
         Args:
-            settings: Configuración a usar; por defecto la global.
-            client: Cliente ``instructor`` ya construido (inyectable en pruebas).
-            model: Sobrescribe ``LLM_MODEL``.
-            database: Acceso a la base de datos para leer la taxonomía viva
-                (curso/tema/subtema y prerrequisitos) y ensamblar el prompt de
-                grounding dinámico. Inyectable en pruebas; si es ``None``, el
-                prompt se construye sin catálogo (base de datos vacía).
+            settings: Configuration to use; the global one by default.
+            client: An already built ``instructor`` client (injectable in tests).
+            model: Overrides ``LLM_MODEL``.
+            database: Database access to read the live taxonomy
+                (course/topic/subtopic and prerequisites) and assemble the dynamic
+                grounding prompt. Injectable in tests; if ``None``, the prompt is
+                built without a catalog (empty database).
         """
         self.settings = settings or get_settings()
         self._client = client
@@ -399,34 +398,34 @@ class Structurer:
         )
 
     def _live_taxonomy_tree(self) -> dict[str, dict[str, list[str]]]:
-        """Lee la taxonomía curricular viva de la base de datos, o ``{}`` si no hay."""
+        """Read the live curricular taxonomy from the database, or ``{}`` if none."""
         if self.database is None or not hasattr(self.database, "get_live_taxonomy_tree"):
             return {}
         try:
             return self.database.get_live_taxonomy_tree()
-        except Exception:  # noqa: BLE001 - el grounding es opcional, nunca bloquea
-            logger.warning("no se pudo leer la taxonomía viva de la base de datos", exc_info=True)
+        except Exception:  # noqa: BLE001 - grounding is optional, never blocks
+            logger.warning("could not read the live taxonomy from the database", exc_info=True)
             return {}
 
     def _live_prerequisites(self) -> list[str]:
-        """Lee el catálogo vivo de prerrequisitos de la base de datos, o ``[]`` si no hay."""
+        """Read the live prerequisite catalog from the database, or ``[]`` if none."""
         if self.database is None or not hasattr(self.database, "list_prerequisites"):
             return []
         try:
             rows = self.database.list_prerequisites()
-        except Exception:  # noqa: BLE001 - el grounding es opcional, nunca bloquea
+        except Exception:  # noqa: BLE001 - grounding is optional, never blocks
             logger.warning(
-                "no se pudo leer el catálogo de prerrequisitos de la base de datos",
+                "could not read the prerequisite catalog from the database",
                 exc_info=True,
             )
             return []
         return [str(row["slug"]) for row in rows if row.get("slug")]
 
     def _live_taxonomy_names(self) -> dict[tuple[str, str, str], dict[str, str]]:
-        """Lee los nombres localizados ya existentes de la base de datos.
+        """Read the already existing localized names from the database.
 
-        Devuelve un mapa ``(kind, parent_slug, slug) -> {locale: label}`` para que
-        el LLM reutilice los nombres conocidos en vez de inventar variantes.
+        Returns a map ``(kind, parent_slug, slug) -> {locale: label}`` so the LLM
+        reuses the known names instead of inventing variants.
         """
         if self.database is None or not hasattr(self.database, "taxonomy_label_map"):
             return {}
@@ -435,21 +434,20 @@ class Structurer:
             for locale in SUPPORTED_LOCALES:
                 for key, label in self.database.taxonomy_label_map(locale=locale).items():
                     names.setdefault(key, {})[locale] = label
-        except Exception:  # noqa: BLE001 - el grounding es opcional, nunca bloquea
+        except Exception:  # noqa: BLE001 - grounding is optional, never blocks
             logger.warning(
-                "no se pudieron leer los nombres de taxonomía de la base de datos",
+                "could not read the taxonomy names from the database",
                 exc_info=True,
             )
             return {}
         return names
 
     def _build_system_prompt(self, *, refining: bool) -> str:
-        """Ensambla el system prompt dinámicamente con la taxonomía viva de la BD.
+        """Assemble the system prompt dynamically with the live DB taxonomy.
 
-        Parte de las reglas estáticas de formato y les adjunta el catálogo de
-        cursos/temas/subtemas y de prerrequisitos leídos en vivo, de modo que el
-        LLM reutilice los slugs y nombres ya existentes en lugar de inventar
-        variantes.
+        Starts from the static formatting rules and appends the course/topic/
+        subtopic and prerequisite catalog read live, so that the LLM reuses the
+        slugs and names already in existence instead of inventing variants.
         """
         rules = _REFINING_SYSTEM_PROMPT if refining else _STRUCTURING_SYSTEM_PROMPT
         names = self._live_taxonomy_names()
@@ -467,19 +465,19 @@ class Structurer:
         *,
         hints: str | None = None,
     ) -> list[StructuredQuestion]:
-        """Convierte la transcripción intermedia en preguntas enriquecidas.
+        """Turn the intermediate transcription into enriched questions.
 
-        Una sola llamada al LLM devuelve, por pregunta, el TeX formateado y la
-        clasificación curricular (curso, tema, subtema, dificultad y
-        prerrequisitos).
+        A single LLM call returns, per question, the formatted TeX and the
+        curricular classification (course, topic, subtopic, difficulty and
+        prerequisites).
 
         Raises:
-            StructuringError: si no hay texto, el proveedor falla o no devuelve
-                ninguna pregunta.
+            StructuringError: if there is no text, the provider fails or returns
+                no question.
         """
         text = intermediate.raw_markdown.strip()
         if not text:
-            raise StructuringError("no hay texto transcrito que estructurar")
+            raise StructuringError("there is no transcribed text to structure")
 
         messages = [
             {"role": "system", "content": self._build_system_prompt(refining=False)},
@@ -493,8 +491,8 @@ class Structurer:
                 temperature=0.0,
                 max_retries=self._max_retries,
             )
-        except Exception as exc:  # noqa: BLE001 - errores de proveedor y de esquema
-            raise StructuringError(f"fallo en la estructuración remota: {exc}") from exc
+        except Exception as exc:  # noqa: BLE001 - provider and schema errors
+            raise StructuringError(f"remote structuring failed: {exc}") from exc
 
         if raw is None:
             drafts: list[QuestionDraft] = []
@@ -503,7 +501,7 @@ class Structurer:
         else:
             drafts = list(raw)
         if not drafts:
-            raise StructuringError("el LLM remoto no produjo ninguna pregunta")
+            raise StructuringError("the remote LLM produced no question")
 
         return [self._assemble(draft, index, intermediate) for index, draft in enumerate(drafts)]
 
@@ -514,16 +512,17 @@ class Structurer:
         *,
         hints: str | None = None,
     ) -> StructuredQuestion:
-        """Reanaliza UNA pregunta aplicando contexto correctivo.
+        """Reanalyze ONE question applying corrective context.
 
-        Una sola llamada al LLM devuelve, en la MISMA respuesta JSON, el TeX
-        corregido y la clasificación curricular re-inferida (``course``, ``topic``,
-        ``subtopic``, ``difficulty`` y ``prerequisites``) usando el mismo esquema
-        :class:`QuestionDraft`. Conserva el ``id`` y ``created_at`` de la pregunta
-        original para que el objeto actualice la base. No resuelve el ejercicio.
+        A single LLM call returns, in the SAME JSON response, the corrected TeX
+        and the re-inferred curricular classification (``course``, ``topic``,
+        ``subtopic``, ``difficulty`` and ``prerequisites``) using the same
+        :class:`QuestionDraft` schema. It preserves the ``id`` and ``created_at``
+        of the original question so the object updates the database. It does not
+        solve the exercise.
 
         Raises:
-            StructuringError: si el proveedor falla o no devuelve una pregunta.
+            StructuringError: if the provider fails or returns no question.
         """
         messages = [
             {"role": "system", "content": self._build_system_prompt(refining=True)},
@@ -540,11 +539,11 @@ class Structurer:
                 temperature=0.0,
                 max_retries=self._max_retries,
             )
-        except Exception as exc:  # noqa: BLE001 - errores de proveedor y de esquema
-            raise StructuringError(f"fallo en el refinamiento remoto: {exc}") from exc
+        except Exception as exc:  # noqa: BLE001 - provider and schema errors
+            raise StructuringError(f"remote refinement failed: {exc}") from exc
 
         if raw is None:
-            raise StructuringError("el LLM remoto no produjo ninguna pregunta refinada")
+            raise StructuringError("the remote LLM produced no refined question")
 
         return self._assemble(
             raw,
@@ -632,9 +631,9 @@ class Structurer:
         )
         referenced = self._referenced_figure_ids(draft)
         figures = [figure for figure in intermediate.figures if figure.id in referenced]
-        # Normaliza los delimitadores matemáticos antes de calcular el hash canónico
-        # para que enunciado y deduplicación queden coherentes (idempotente con el
-        # validador de ``QuestionRaw``).
+        # Normalize the math delimiters before computing the canonical hash so that
+        # the statement and deduplication stay consistent (idempotent with the
+        # ``QuestionRaw`` validator).
         statement_raw = sanitize_math_delimiters(draft.statement_raw)
         try:
             question = EnrichedQuestion(
@@ -656,7 +655,7 @@ class Structurer:
         except ValidationError as exc:
             return StructuredQuestion(
                 question=None,
-                error=f"la pregunta {index + 1} no superó el esquema: {exc}",
+                error=f"question {index + 1} did not pass the schema: {exc}",
             )
         return StructuredQuestion(
             question=question,
@@ -665,7 +664,7 @@ class Structurer:
 
     @staticmethod
     def _localized(entry: LocalizedName) -> dict[str, str] | None:
-        """Normaliza un nombre del LLM a ``{es, en}``, o ``None`` si queda vacío."""
+        """Normalize an LLM name to ``{es, en}``, or ``None`` if it ends up empty."""
         es = entry.es.strip()
         en = entry.en.strip()
         if not es or not en:
@@ -674,11 +673,11 @@ class Structurer:
 
     @classmethod
     def _collect_taxonomy_names(cls, draft: QuestionDraft) -> list[TaxonomyNames]:
-        """Proyecta los nombres del LLM en entradas de taxonomía válidas.
+        """Project the LLM names into valid taxonomy entries.
 
-        Solo se conservan los nombres que corresponden a la clasificación
-        realmente emitida (curso, tema, subtema y prerrequisitos presentes); un
-        prerrequisito nombrado que no aparezca en la lista se descarta.
+        Only the names that correspond to the classification actually emitted are
+        kept (course, topic, subtopic and prerequisites present); a named
+        prerequisite that does not appear in the list is dropped.
         """
         entries: list[TaxonomyNames] = []
 

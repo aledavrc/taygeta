@@ -199,6 +199,54 @@ async def test_question_panels_build_and_switch_view(ui_env: None) -> None:
         await user.should_see("➕ Añadir nueva figura")
 
 
+async def test_question_panels_render_in_english(ui_env: None) -> None:
+    """The same panels render their strings in English when the locale is 'en'."""
+    import taygeta.i18n as i18n
+    from taygeta.ui.nice import localization
+
+    settings = get_settings()
+    database = Database(settings=settings)
+    staged = _make_questions()
+
+    def root() -> None:
+        session = SessionState()
+        session.questions = {index: QuestionState() for index in range(len(staged))}
+        for index, item in enumerate(staged):
+            QuestionPanel(
+                ui.column().classes("w-full"),
+                index=index,
+                staged=item,
+                session=session,
+                source_path=None,
+                storage=_StubStorage(),
+                settings=settings,
+                database=database,
+                pipeline=None,
+            )
+
+    from nicegui.testing import user_simulation
+
+    # Force the locale to English for the duration of the simulation, then
+    # restore the session-backed resolver installed by the UI localization layer.
+    i18n.set_locale_resolver(lambda: "en")
+    try:
+        async with user_simulation(root=root) as user:
+            await user.open("/")
+            await user.should_see(content="Question 1 — VALID")
+            await user.should_see(content="Question 2 — NEEDS_ATTENTION")
+            await user.should_see("Approve and save this question")
+            await user.should_see("Choice 1 — id")
+            await user.should_see("Advanced options")
+            await user.should_see("Original image")
+            await user.should_see("There is no source document to display.")
+
+            # Switching to "New figures" shows figure management (English).
+            user.find("New figures").click()
+            await user.should_see("➕ Add new figure")
+    finally:
+        i18n.set_locale_resolver(localization.active_locale)
+
+
 async def test_add_figure_area_renders_cropper_with_real_source(
     ui_env: None, tmp_path: Path
 ) -> None:

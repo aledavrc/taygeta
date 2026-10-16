@@ -1,47 +1,48 @@
 # ============================================================================
-# Taygeta — Override AMD/ROCm (sección 12.2). NO es una definición completa:
-# solo modifica el servicio `ocr` sobre el Compose base.
+# Taygeta — AMD/ROCm override (section 12.2). It is NOT a complete definition:
+# it only modifies the `ocr` service on top of the base Compose.
 #
-# Uso:
+# Usage:
 #   docker compose -f docker-compose.yml -f docker-compose.rocm.yml up --build
 #
-# No mezclar con docker-compose.cuda.yml.
+# Do not mix with docker-compose.cuda.yml.
 # ============================================================================
 services:
   ocr:
     build:
       context: .
       dockerfile: docker/ocr/Dockerfile.rocm
-      # Arquitectura GPU a compilar. Por defecto gfx1030 (RX 6800/6800XT/6900XT).
-      # Otros ejemplos: gfx1100 (RX 7900), gfx1031 (RX 6700), gfx900 (Vega).
+      # GPU architecture to compile. Defaults to gfx1030 (RX 6800/6800XT/6900XT).
+      # Other examples: gfx1100 (RX 7900), gfx1031 (RX 6700), gfx900 (Vega).
       args:
         AMDGPU_TARGETS: ${AMDGPU_TARGETS:-gfx1030}
     image: taygeta-ocr:rocm
-    # Acceso mínimo a los dispositivos AMD (sin privileged).
+    # Minimal access to the AMD devices (without privileged).
     devices:
       - /dev/kfd
       - /dev/dri
-    # Grupos de dispositivo habituales en el host (ajustar o eliminar si no
-    # se corresponden con la distribución del host).
+    # Device groups usual on the host (adjust or remove if they do not
+    # correspond to the host distribution).
     group_add:
       - video
       - render
     environment:
-      # Override HSA SOLO si ROCm no detecta la GPU de forma nativa. Déjalo SIN
-      # definir (se elimina del entorno) para usar detección nativa; NO lo dejes
-      # vacío, un valor vacío rompe la detección. Ejemplo RDNA2: 10.3.0.
+      # HSA override ONLY if ROCm does not detect the GPU natively. Leave it
+      # UNDEFINED (it is removed from the environment) to use native detection;
+      # do NOT leave it empty, an empty value breaks detection. RDNA2 example: 10.3.0.
       HSA_OVERRIDE_GFX_VERSION: ${HSA_OVERRIDE_GFX_VERSION:-}
-      # Workaround gfx1030 (RX 6800/6800XT/6900XT): con ROCm sobre kernels muy
-      # recientes, la carga del modelo puede fallar con "Memory access fault ...
-      # Page not present or supervisor privilege". Desactivar SDMA evita el fallo
-      # (las copias caen a la cola de cómputo; el coste es mínimo). Verificado en
-      # RX 6800 XT + kernel 7.x. En RDNA3 (gfx1100) suele no ser necesario:
-      # sobrescríbelo con HSA_ENABLE_SDMA=1 si tu GPU no lo requiere.
+      # gfx1030 workaround (RX 6800/6800XT/6900XT): with ROCm on very recent
+      # kernels, model loading may fail with "Memory access fault ...
+      # Page not present or supervisor privilege". Disabling SDMA avoids the
+      # failure (copies fall back to the compute queue; the cost is minimal).
+      # Verified on RX 6800 XT + 7.x kernel. On RDNA3 (gfx1100) it is usually
+      # not needed: override it with HSA_ENABLE_SDMA=1 if your GPU does not
+      # require it.
       HSA_ENABLE_SDMA: ${HSA_ENABLE_SDMA:-0}
-      # Capas descargadas a GPU (flag explícito -ngl/--n-gpu-layers). No se usa
-      # LLAMA_ARG_N_GPU_LAYERS para evitar el aviso de sobrescritura.
+      # Layers offloaded to GPU (explicit -ngl/--n-gpu-layers flag).
+      # LLAMA_ARG_N_GPU_LAYERS is not used to avoid the override warning.
       OCR_GPU_LAYERS: 99
-      # Aborta si no se detecta GPU en vez de caer silenciosamente a CPU.
+      # Aborts if no GPU is detected instead of silently falling back to CPU.
       OCR_REQUIRE_GPU: "1"
     volumes:
       - ocr-models:/models

@@ -1,27 +1,27 @@
 # ============================================================================
-# Taygeta — Override NVIDIA/CUDA (sección 12.3). NO es una definición
-# completa: solo modifica el servicio `ocr` sobre el Compose base.
+# Taygeta — NVIDIA/CUDA override (section 12.3). It is NOT a complete
+# definition: it only modifies the `ocr` service on top of the base Compose.
 #
-# Uso:
+# Usage:
 #   docker compose -f docker-compose.yml -f docker-compose.cuda.yml up --build
 #
-# Requisitos del host:
-#   - Driver NVIDIA + NVIDIA Container Toolkit.
-#   - Compose v2 moderno con soporte de `deploy.resources.reservations.devices`.
-#   - Verificación previa:
+# Host requirements:
+#   - NVIDIA driver + NVIDIA Container Toolkit.
+#   - Modern Compose v2 with support for `deploy.resources.reservations.devices`.
+#   - Prior check:
 #       docker run --rm --gpus all nvidia/cuda:12.4.1-base-ubuntu22.04 nvidia-smi
 #
-# Para reservar GPUs concretas, sustituir `count: all` por `device_ids: ["0"]`
-# o usar `count: 1`.
-# No mezclar con docker-compose.rocm.yml.
+# To reserve specific GPUs, replace `count: all` with `device_ids: ["0"]`
+# or use `count: 1`.
+# Do not mix with docker-compose.rocm.yml.
 # ============================================================================
 services:
   ocr:
     build:
       context: .
       dockerfile: docker/ocr/Dockerfile.cuda
-      # Arquitecturas CUDA a compilar. Incluye sm_90 (Hopper); ajusta a las GPUs
-      # reales del despliegue.
+      # CUDA architectures to compile. Includes sm_90 (Hopper); adjust to the
+      # actual deployment GPUs.
       args:
         CUDA_ARCHITECTURES: "${CUDA_ARCHITECTURES:-61;70;75;80;86;89;90}"
     image: taygeta-ocr:cuda
@@ -29,7 +29,7 @@ services:
       NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-all}
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
       OCR_GPU_LAYERS: 99
-      # Aborta si no se detecta GPU en vez de caer silenciosamente a CPU.
+      # Aborts if no GPU is detected instead of silently falling back to CPU.
       OCR_REQUIRE_GPU: "1"
     deploy:
       resources:

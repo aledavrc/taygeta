@@ -1,7 +1,7 @@
 [project]
 name = "taygeta"
 version = "0.1.0"
-description = "Banco de examenes cientificos y sistema de recuperacion MCP: ingesta hibrida, HITL, RAG y compilacion Typst."
+description = "Scientific exam bank and MCP retrieval system: hybrid ingestion, HITL, RAG and Typst compilation."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "Proprietary" }
@@ -12,21 +12,21 @@ dependencies = [
     "instructor>=1.7.0",
     "openai>=1.60.0",
     "sentence-transformers>=3.0.0",
-    # Se declara como dependencia directa para poder forzar el índice CPU de
-    # PyTorch en [tool.uv.sources] (uv solo respeta `sources` para dependencias
-    # directas). Evita las ruedas CUDA/NVIDIA en hardware AMD.
+    # Declared as a direct dependency so the CPU index of PyTorch can be forced
+    # in [tool.uv.sources] (uv only honors `sources` for direct dependencies).
+    # Avoids the CUDA/NVIDIA wheels on AMD hardware.
     "torch>=2.0.0",
     "pymupdf>=1.25.0",
     "pillow>=11.0.0",
     "pandoc>=2.4",
     "boto3>=1.35.0",
-    # Conversor LaTeX↔Typst en Rust (tylax) para las fórmulas del transpilador.
-    # Wheel abi3 (cp310+) → compatible con Python 3.11; requiere glibc >= 2.34.
+    # LaTeX↔Typst converter in Rust (tylax) for the transpiler's formulas.
+    # abi3 wheel (cp310+) → compatible with Python 3.11; requires glibc >= 2.34.
     "tylax>=0.3.8,<1",
-    # UI HITL (revisión y recorte manual de figuras) sobre FastAPI.
+    # HITL UI (manual figure review and cropping) on top of FastAPI.
     "nicegui>=3.18.0",
-    # Renderizado del enunciado en la UI: markdown2 (el que usa NiceGUI) con
-    # protección de las fórmulas TeX antes de renderizar (ver ui/nice/math_render.py).
+    # Statement rendering in the UI: markdown2 (the one NiceGUI uses) with
+    # protection of TeX formulas before rendering (see ui/nice/math_render.py).
     "markdown2>=2.5.0",
 ]
 
@@ -46,7 +46,7 @@ packages = ["src/taygeta"]
 dev = [
     "pytest>=8.3.0",
     "pytest-cov>=6.0.0",
-    # Plugin de pytest para los tests async del arnés NiceGUI (`user_simulation`).
+    # pytest plugin for the async tests of the NiceGUI harness (`user_simulation`).
     "anyio>=4.0.0",
     "ruff>=0.8.0",
     "mypy>=1.13.0",
@@ -55,9 +55,9 @@ dev = [
 ]
 
 # ---------------------------------------------------------------------------
-# PyTorch para CPU (entorno AMD): la rueda genérica de PyPI arrastra grandes
-# dependencias CUDA/NVIDIA a través de sentence-transformers. Se fija un índice
-# explícito con las compilaciones +cpu, usado solo por los paquetes de PyTorch.
+# PyTorch for CPU (AMD environment): the generic PyPI wheel drags in large
+# CUDA/NVIDIA dependencies through sentence-transformers. An explicit index is
+# pinned with the +cpu builds, used only by the PyTorch packages.
 # ---------------------------------------------------------------------------
 [[tool.uv.index]]
 name = "pytorch-cpu"

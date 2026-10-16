@@ -1,12 +1,12 @@
 # syntax=docker/dockerfile:1
 #
-# Imagen principal de la aplicación Taygeta (sección 11.2).
-# Multi-stage con uv: se construye un entorno virtual reproducible y se copia a
-# una imagen de runtime con Pandoc y Typst CLI instalados y verificados.
-# No incluye pesos de modelos, base de datos, documentos ni figuras.
+# Main Taygeta application image (section 11.2).
+# Multi-stage with uv: a reproducible virtual environment is built and copied to
+# a runtime image with Pandoc and Typst CLI installed and verified.
+# It does not include model weights, database, documents or figures.
 
 # ---------------------------------------------------------------------------
-# Etapa 1: resolución e instalación de dependencias con uv
+# Stage 1: dependency resolution and installation with uv
 # ---------------------------------------------------------------------------
 FROM ghcr.io/astral-sh/uv:python3.11-bookworm-slim AS builder
 
@@ -16,22 +16,22 @@ ENV UV_COMPILE_BYTECODE=1 \
 
 WORKDIR /app
 
-# Capa de dependencias cacheada respecto a uv.lock / pyproject.toml.
+# Dependency layer cached against uv.lock / pyproject.toml.
 RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=bind,source=uv.lock,target=uv.lock \
     --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
     uv sync --frozen --no-dev --no-install-project
 
-# Código y configuración no secreta.
+# Code and non-secret configuration.
 COPY pyproject.toml uv.lock README.md ./
 COPY src ./src
 
-# Instala el proyecto dentro del entorno virtual.
+# Installs the project inside the virtual environment.
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev
 
 # ---------------------------------------------------------------------------
-# Etapa 2: imagen de runtime
+# Stage 2: runtime image
 # ---------------------------------------------------------------------------
 FROM python:3.11-slim-bookworm AS runtime
 
@@ -43,13 +43,13 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONDONTWRITEBYTECODE=1 \
     PATH="/app/.venv/bin:${PATH}"
 
-# Dependencias del sistema: curl (healthchecks/descargas), ca-certificates y xz.
+# System dependencies: curl (healthchecks/downloads), ca-certificates and xz.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       ca-certificates curl xz-utils \
  && rm -rf /var/lib/apt/lists/*
 
-# CLI de Pandoc (paquete oficial .deb del release indicado).
+# Pandoc CLI (official .deb package of the given release).
 RUN set -eux; \
     arch="$(dpkg --print-architecture)"; \
     pkg="pandoc-${PANDOC_VERSION}-1-${arch}.deb"; \
@@ -59,13 +59,13 @@ RUN set -eux; \
     rm -f /tmp/pandoc.deb; \
     pandoc --version
 
-# CLI de Typst (binario estático oficial musl).
+# Typst CLI (official static musl binary).
 RUN set -eux; \
     arch="$(dpkg --print-architecture)"; \
     case "${arch}" in \
       amd64) target="x86_64-unknown-linux-musl" ;; \
       arm64) target="aarch64-unknown-linux-musl" ;; \
-      *) echo "arquitectura no soportada: ${arch}" >&2; exit 1 ;; \
+      *) echo "unsupported architecture: ${arch}" >&2; exit 1 ;; \
     esac; \
     curl -fsSL -o /tmp/typst.tar.xz \
       "https://github.com/typst/typst/releases/download/v${TYPST_VERSION}/typst-${target}.tar.xz"; \
@@ -74,29 +74,29 @@ RUN set -eux; \
     rm -rf /tmp/typst.tar.xz "/tmp/typst-${target}"; \
     typst --version
 
-# Usuario no root.
+# Non-root user.
 RUN groupadd --system --gid 1001 taygeta \
  && useradd --system --uid 1001 --gid taygeta --create-home taygeta
 
 WORKDIR /app
 
-# Entorno virtual ya resuelto + código.
+# Already resolved virtual environment + code.
 COPY --from=builder --chown=taygeta:taygeta /app/.venv /app/.venv
 COPY --chown=taygeta:taygeta pyproject.toml uv.lock ./
 COPY --chown=taygeta:taygeta src ./src
 
-# Directorios de runtime (se sobreescriben con volúmenes persistentes).
+# Runtime directories (overridden by persistent volumes).
 RUN mkdir -p /app/data /app/uploads /app/downloads \
  && chown -R taygeta:taygeta /app
 
 USER taygeta
 
-# 8000: MCP/HTTP de descargas. 8501: UI HITL NiceGUI (servicio `ui`, misma imagen).
+# 8000: MCP/download HTTP. 8501: NiceGUI HITL UI (service `ui`, same image).
 EXPOSE 8000 8501
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=5 \
   CMD curl -fsS http://localhost:8000/health || exit 1
 
-# Comando de inicio del servidor MCP (script instalado por el proyecto).
-# La UI se inicia con: taygeta-ui (servicio `ui` en docker-compose.yml).
+# MCP server start command (script installed by the project).
+# The UI starts with: taygeta-ui (service `ui` in docker-compose.yml).
 CMD ["taygeta-server"]

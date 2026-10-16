@@ -1,4 +1,4 @@
-# Contexto de build: solo código y configuración no secreta.
+# Build context: code and non-secret configuration only.
 .git
 .gitignore
 .venv

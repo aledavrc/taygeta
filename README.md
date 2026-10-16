@@ -1,100 +1,99 @@
 # Taygeta
 
-Banco de exámenes científicos y sistema de recuperación **MCP** con revisión
-**Human-in-the-Loop**. Taygeta ingiere documentos PDF/imagen, extrae preguntas y
-figuras, transcribe matemáticas a Markdown/TeX, las clasifica curricularmente y
-las almacena **sin soluciones ni respuestas correctas**. Después permite buscar
-ejercicios reales (RAG) y generar exámenes de práctica compilados a PDF con
-**Typst**.
+Scientific exam bank and **MCP** retrieval system with **Human-in-the-Loop**
+review. Taygeta ingests PDF/image documents, extracts questions and figures,
+transcribes mathematics to Markdown/TeX, classifies them curricularly and stores
+them **without solutions or correct answers**. It then allows searching real
+exercises (RAG) and generating practice exams compiled to PDF with **Typst**.
 
-> **Regla de oro:** Taygeta transcribe y estructura el contenido visible; nunca
-> resuelve los ejercicios, no infiere respuestas correctas y no almacena claves
-> de respuesta en ninguna capa (esquemas, staging, base de datos, RAG, PDFs ni
-> salidas MCP).
-
----
-
-## Índice
-
-1. [Arquitectura](#arquitectura)
-2. [Estructura del repositorio](#estructura-del-repositorio)
-3. [Requisitos](#requisitos)
-4. [Instalación y configuración local](#instalación-y-configuración-local)
-5. [Uso local](#uso-local)
-6. [Despliegue con Docker Compose](#despliegue-con-docker-compose)
-7. [Modelos OCR](#modelos-ocr)
-8. [LLM remoto](#llm-remoto)
-9. [Almacenamiento SeaweedFS (S3)](#almacenamiento-seaweedfs-s3)
-10. [Endpoints HTTP y herramientas MCP](#endpoints-http-y-herramientas-mcp)
-11. [Flujo Human-in-the-Loop](#flujo-human-in-the-loop)
-12. [Respaldos y restauración](#respaldos-y-restauración)
-13. [Verificación y pruebas](#verificación-y-pruebas)
-14. [Limitaciones actuales](#limitaciones-actuales)
-15. [Seguridad](#seguridad)
+> **Golden rule:** Taygeta transcribes and structures the visible content; it
+> never solves the exercises, does not infer correct answers and does not store
+> answer keys in any layer (schemas, staging, database, RAG, PDFs or MCP
+> outputs).
 
 ---
 
-## Arquitectura
+## Table of contents
 
-Ingesta **híbrida Edge-to-Cloud** en dos pases claramente separados:
+1. [Architecture](#architecture)
+2. [Repository structure](#repository-structure)
+3. [Requirements](#requirements)
+4. [Installation and local configuration](#installation-and-local-configuration)
+5. [Local usage](#local-usage)
+6. [Deployment with Docker Compose](#deployment-with-docker-compose)
+7. [OCR models](#ocr-models)
+8. [Remote LLM](#remote-llm)
+9. [SeaweedFS storage (S3)](#seaweedfs-storage-s3)
+10. [HTTP endpoints and MCP tools](#http-endpoints-and-mcp-tools)
+11. [Human-in-the-Loop workflow](#human-in-the-loop-workflow)
+12. [Backups and restoration](#backups-and-restoration)
+13. [Verification and testing](#verification-and-testing)
+14. [Current limitations](#current-limitations)
+15. [Security](#security)
+
+---
+
+## Architecture
+
+**Hybrid Edge-to-Cloud** ingestion in two clearly separated passes:
 
 ```
  PDF/PNG/JPG
      │
      ▼
-[1] Preparación  (ingest/image_extractor.py)
-     PyMuPDF · rasterizado 300 DPI · detección de figuras · BBox 0-1000
-     padding 1.5% · recortes temporales → subida a SeaweedFS
+[1] Preparation  (ingest/image_extractor.py)
+     PyMuPDF · 300 DPI rasterization · figure detection · BBox 0-1000
+     padding 1.5% · temporary crops → upload to SeaweedFS
      │
      ▼
-[2] Pase 1 · OCR local  (ingest/ocr_client.py)
-     Servicio local OpenAI-compatible · transcribe a Markdown/TeX
-     marca [ILEGIBLE] · NO clasifica ni resuelve
+[2] Pass 1 · local OCR  (ingest/ocr_client.py)
+     Local OpenAI-compatible service · transcribes to Markdown/TeX
+     marks [ILEGIBLE] · does NOT classify or solve
      │
      ▼
-[3] Estructuración en un solo pase  (agents/structurer.py)
-     LLM remoto + instructor + Pydantic v2 → EnrichedQuestion
-     (TeX formateado + course/topic/subtopic + difficulty + prerequisites)
+[3] Single-pass structuring  (agents/structurer.py)
+     Remote LLM + instructor + Pydantic v2 → EnrichedQuestion
+     (formatted TeX + course/topic/subtopic + difficulty + prerequisites)
      │
      ▼
-[4] Validación en dos capas  (ingest/validator.py)
-     Capa 1 heurística local  +  Capa 2 semántica remota
+[4] Two-layer validation  (ingest/validator.py)
+     Layer 1 local heuristics  +  Layer 2 remote semantics
      │
      ▼
-[5] Staging (VALID / NEEDS_ATTENTION)  →  Revisión humana (UI NiceGUI / chat MCP)
+[5] Staging (VALID / NEEDS_ATTENTION)  →  Human review (NiceGUI UI / MCP chat)
      │
      ▼
-[6] Confirmación explícita → SQLite (taygeta.db, búsqueda FTS5)
+[6] Explicit confirmation → SQLite (taygeta.db, FTS5 search)
      │
      ▼
-[7] RAG + generación de exámenes (Typst)  →  PDF / ZIP de fuente
+[7] RAG + exam generation (Typst)  →  PDF / source ZIP
 ```
 
-Componentes transversales:
+Cross-cutting components:
 
-- **Esquemas canónicos** (`core/schema.py`): `QuestionRaw`, `EnrichedQuestion`,
+- **Canonical schemas** (`core/schema.py`): `QuestionRaw`, `EnrichedQuestion`,
   `Choice`, `FigureReference`, `TranscriptionIntermediate`.
-- **Transpilador** (`core/transpiler.py`): AST de Pandoc → Typst; las fórmulas
-  TeX se delegan a **tylax** (conversor LaTeX↔Typst en Rust). Exportación LaTeX
-  y compilación de validación con el CLI de Typst.
-- **Persistencia** (`server/db.py`): SQLite + tabla virtual **FTS5** sincronizada
-  por triggers; taxonomía y staging.
-- **Objetos** (`server/object_storage.py`): cliente boto3 para SeaweedFS (S3).
-- **UI** (`ui/nice/`): revisión Human-in-the-Loop en **NiceGUI** (FastAPI).
-- **Servidor** (`server/mcp_server.py`): herramientas FastMCP, descargas HTTP y
-  limpiador TTL.
+- **Transpiler** (`core/transpiler.py`): Pandoc AST → Typst; TeX formulas are
+  delegated to **tylax** (LaTeX↔Typst converter in Rust). LaTeX export and
+  validation compilation with the Typst CLI.
+- **Persistence** (`server/db.py`): SQLite + **FTS5** virtual table synchronized
+  by triggers; taxonomy and staging.
+- **Objects** (`server/object_storage.py`): boto3 client for SeaweedFS (S3).
+- **UI** (`ui/nice/`): Human-in-the-Loop review in **NiceGUI** (FastAPI).
+- **Server** (`server/mcp_server.py`): FastMCP tools, HTTP downloads and TTL
+  cleaner.
 
 ---
 
-## Estructura del repositorio
+## Repository structure
 
 ```
 taygeta/
-├── Dockerfile                     # imagen principal multi-stage (uv + Pandoc + Typst)
+├── Dockerfile                     # main multi-stage image (uv + Pandoc + Typst)
 ├── .dockerignore
-├── docker-compose.yml             # base neutral de GPU
-├── docker-compose.rocm.yml        # override AMD/ROCm
-├── docker-compose.cuda.yml        # override NVIDIA/CUDA
+├── docker-compose.yml             # GPU-neutral base
+├── docker-compose.rocm.yml        # AMD/ROCm override
+├── docker-compose.cuda.yml        # NVIDIA/CUDA override
 ├── docker/
 │   ├── ocr/
 │   │   ├── Dockerfile.cpu
@@ -102,7 +101,7 @@ taygeta/
 │   │   ├── Dockerfile.cuda
 │   │   └── entrypoint.sh
 │   └── seaweedfs/
-│       └── s3.json.example        # credenciales S3 de ejemplo (sin secretos)
+│       └── s3.json.example        # example S3 credentials (no secrets)
 ├── pyproject.toml
 ├── uv.lock
 ├── .env.example
@@ -116,39 +115,39 @@ taygeta/
 
 ---
 
-## Requisitos
+## Requirements
 
-- **Python 3.11+** y [uv](https://docs.astral.sh/uv/).
-- Para el flujo completo de compilación y OCR: **Pandoc** y **Typst** CLI
-  (ya instalados y verificados en la imagen Docker).
-- Conversor TeX→Typst **tylax**: se instala automáticamente como dependencia de
-  Python (wheel nativa de Rust, `abi3`).
-- **Docker** y **Docker Compose v2** para el despliegue por contenedores.
-- GPU opcional: AMD/ROCm o NVIDIA/CUDA para acelerar el OCR local.
+- **Python 3.11+** and [uv](https://docs.astral.sh/uv/).
+- For the full compilation and OCR flow: **Pandoc** and **Typst** CLI
+  (already installed and verified in the Docker image).
+- **tylax** TeX→Typst converter: it is installed automatically as a Python
+  dependency (native Rust wheel, `abi3`).
+- **Docker** and **Docker Compose v2** for container deployment.
+- Optional GPU: AMD/ROCm or NVIDIA/CUDA to accelerate local OCR.
 
 ---
 
-## Instalación y configuración local
+## Installation and local configuration
 
 ```bash
-# 1) Dependencias (crea/actualiza uv.lock de forma coherente)
+# 1) Dependencies (creates/updates uv.lock consistently)
 uv sync
 
-# 2) Configuración: copia el ejemplo y completa los valores
+# 2) Configuration: copy the example and fill in the values
 cp .env.example .env
-#   Edita .env (claves LLM, endpoint OCR, credenciales S3). NUNCA versiones .env.
+#   Edit .env (LLM keys, OCR endpoint, S3 credentials). NEVER commit .env.
 ```
 
-Comprobar que el entorno quedó correcto:
+Check that the environment is set up correctly:
 
 ```bash
 uv run python -c "from taygeta.core.settings import get_settings; s=get_settings(); print(s.safe_summary())"
 ```
 
-> `uv.lock` se versiona. Tras cambiar `pyproject.toml`, ejecuta `uv lock` o `uv sync`
-> y confirma que `uv.lock` se actualiza de forma coherente.
+> `uv.lock` is versioned. After changing `pyproject.toml`, run `uv lock` or
+> `uv sync` and confirm that `uv.lock` is updated consistently.
 
-Herramientas de calidad:
+Quality tools:
 
 ```bash
 uv run ruff check src
@@ -157,93 +156,95 @@ uv run ruff format --check src
 
 ---
 
-## Uso local
+## Local usage
 
-### Ingesta por CLI (`taygeta-ingest`)
+### CLI ingestion (`taygeta-ingest`)
 
 ```bash
-uv run taygeta-ingest /ruta/a/examen.pdf
-# con contexto correctivo:
-uv run taygeta-ingest /ruta/a/examen.pdf --hint "La condición ilegible es g(x)=x+1"
+uv run taygeta-ingest /path/to/exam.pdf
+# with corrective context:
+uv run taygeta-ingest /path/to/exam.pdf --hint "The illegible condition is g(x)=x+1"
 ```
 
-Imprime un resumen JSON del staging (número de preguntas, estado y sesión).
+It prints a JSON summary of the staging (number of questions, status and
+session).
 
-### Servidor MCP + HTTP (`taygeta-server`)
+### MCP + HTTP server (`taygeta-server`)
 
 ```bash
-uv run taygeta-server          # FastMCP con transporte streamable-http
-# por defecto escucha en http://0.0.0.0:8000  (MCP_HOST / MCP_PORT)
+uv run taygeta-server          # FastMCP with streamable-http transport
+# by default it listens on http://0.0.0.0:8000  (MCP_HOST / MCP_PORT)
 ```
 
-Expone el protocolo MCP en `/mcp` y las rutas HTTP `/health`,
-`/download/{filename}` y `/assets/{asset_id}`.
+It exposes the MCP protocol at `/mcp` and the HTTP routes `/health`,
+`/download/{filename}` and `/assets/{asset_id}`.
 
-### Interfaz de revisión Human-in-the-Loop (NiceGUI)
+### Human-in-the-Loop review interface (NiceGUI)
 
 ```bash
-uv run taygeta-ui            # o: uv run python -m taygeta.ui.nice
+uv run taygeta-ui            # or: uv run python -m taygeta.ui.nice
 # http://localhost:8501
 ```
 
-La UI permite: subir un PDF/PNG/JPG, procesarlo con el pipeline de doble pase
-en background (sin bloquear la interfaz), revisar cada pregunta (editor
-Markdown/TeX con previsualización, taxonomía con comboboxes de curso/tema,
-opciones avanzadas con reanálisis in-place) y gestionar las figuras a la
-derecha (vistas «Figuras» / «Página original», recorte por arrastre, alta y
-borrado) antes de confirmar explícitamente la persistencia en SQLite.
+The UI allows: uploading a PDF/PNG/JPG, processing it with the two-pass pipeline
+in the background (without blocking the interface), reviewing each question (a
+Markdown/TeX editor with preview, taxonomy with course/topic comboboxes,
+advanced options with in-place re-analysis) and managing the figures on the
+right («Figures» / «Original page» views, crop by dragging, add and delete)
+before explicitly confirming persistence into SQLite.
 
-Host y puerto se ajustan con `TAYGETA_UI_HOST` / `TAYGETA_UI_PORT`.
+Host and port are adjusted with `TAYGETA_UI_HOST` / `TAYGETA_UI_PORT`.
 
 ---
 
-## Despliegue con Docker Compose
+## Deployment with Docker Compose
 
-Copia el ejemplo de entorno antes de levantar el stack:
+Copy the environment example before bringing up the stack:
 
 ```bash
-cp .env.example .env      # completa LLM_*, OCR_MODEL_PATH, credenciales S3
+cp .env.example .env      # fill in LLM_*, OCR_MODEL_PATH, S3 credentials
 ```
 
-Configuración dual (local/producción):
+Dual configuration (local/production):
 
 ```dotenv
-APP_ENV=local                       # 'local' o 'production'
-DATABASE_URL=                       # opcional; si está vacía se usa DB_PATH
-                                    # p. ej. sqlite:////app/data/taygeta.db
+APP_ENV=local                       # 'local' or 'production'
+DATABASE_URL=                       # optional; if empty, DB_PATH is used
+                                    # e.g. sqlite:////app/data/taygeta.db
 ```
 
-- `APP_ENV` marca el entorno de ejecución (`Settings.is_production`).
-- `DATABASE_URL` permite apuntar a otra ruta SQLite sin tocar `DB_PATH`; las URLs
-  no SQLite no están soportadas por la capa actual y producen un error explícito.
+- `APP_ENV` sets the runtime environment (`Settings.is_production`).
+- `DATABASE_URL` allows pointing to another SQLite path without touching
+  `DB_PATH`; non-SQLite URLs are not supported by the current layer and produce
+  an explicit error.
 
-### Base / CPU (neutral respecto de GPU)
+### Base / CPU (GPU-neutral)
 
 ```bash
 docker compose up --build
 ```
 
-Servicios: `mcp-server` (8000), `ui` (8501), `ocr` (CPU, solo red interna),
+Services: `mcp-server` (8000), `ui` (8501), `ocr` (CPU, internal network only),
 SeaweedFS (`seaweedfs-master`, `seaweedfs-volume`, `seaweedfs-filer`,
 `seaweedfs-s3:8333`).
 
-### Local con AMD/ROCm
+### Local with AMD/ROCm
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.rocm.yml up --build
 ```
 
-### Producción con NVIDIA/CUDA
+### Production with NVIDIA/CUDA
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.cuda.yml up --build
 ```
 
-> **No mezcles** los overrides ROCm y CUDA en la misma ejecución.
-> El archivo base es neutral de GPU: los dispositivos, el runtime NVIDIA y
-> `HSA_OVERRIDE_GFX_VERSION` solo aparecen en los overrides.
+> **Do not mix** the ROCm and CUDA overrides in the same run.
+> The base file is GPU-neutral: the devices, the NVIDIA runtime and
+> `HSA_OVERRIDE_GFX_VERSION` only appear in the overrides.
 
-Validar la configuración sin levantar los servicios:
+Validate the configuration without bringing up the services:
 
 ```bash
 docker compose config -q
@@ -251,34 +252,35 @@ docker compose -f docker-compose.yml -f docker-compose.rocm.yml config -q
 docker compose -f docker-compose.yml -f docker-compose.cuda.yml config -q
 ```
 
-Requisitos del host para GPU:
+Host requirements for GPU:
 
-- **ROCm**: driver AMD + ROCm compatibles con la imagen base; acceso a `/dev/kfd`
-  y `/dev/dri`; grupos `video`/`render` según el host. Ajusta `AMDGPU_TARGETS`
-  (p. ej. `gfx1100` para RX 7900) antes de compilar la imagen OCR. Solo si ROCm
-  no detecta la GPU de forma nativa define `HSA_OVERRIDE_GFX_VERSION` (p. ej.
-  `10.3.0` para RDNA2); **nunca lo dejes vacío**: un valor vacío desactiva la
-  detección y el OCR cae a CPU. Con `OCR_REQUIRE_GPU=1` (ya activo en el
-  override) el contenedor **aborta con un mensaje claro** si no ve la GPU, en
-  lugar de arrancar degradado.
-- **CUDA**: driver NVIDIA + NVIDIA Container Toolkit. Verifica primero:
+- **ROCm**: AMD driver + ROCm compatible with the base image; access to
+  `/dev/kfd` and `/dev/dri`; `video`/`render` groups depending on the host.
+  Adjust `AMDGPU_TARGETS` (e.g. `gfx1100` for RX 7900) before building the OCR
+  image. Only if ROCm does not detect the GPU natively, define
+  `HSA_OVERRIDE_GFX_VERSION` (e.g. `10.3.0` for RDNA2); **never leave it
+  empty**: an empty value disables detection and OCR falls back to CPU. With
+  `OCR_REQUIRE_GPU=1` (already enabled in the override) the container **aborts
+  with a clear message** if it does not see the GPU, instead of starting
+  degraded.
+- **CUDA**: NVIDIA driver + NVIDIA Container Toolkit. Verify first:
   ```bash
   docker run --rm --gpus all nvidia/cuda:12.4.1-base-ubuntu22.04 nvidia-smi
   ```
-  Para reservar GPUs concretas, edita `docker-compose.cuda.yml` y cambia
-  `count: all` por `count: 1` o `device_ids: ["0"]`.
+  To reserve specific GPUs, edit `docker-compose.cuda.yml` and change
+  `count: all` to `count: 1` or `device_ids: ["0"]`.
 
 ---
 
-## Modelos OCR
+## OCR models
 
-El servicio `ocr` usa `llama-server` (llama.cpp) con una API **OpenAI-compatible**
-y soporte multimodal. **Los pesos no se incluyen en el repositorio ni en la
-imagen**: viven en el volumen persistente `ocr-models`.
+The `ocr` service uses `llama-server` (llama.cpp) with an **OpenAI-compatible**
+API and multimodal support. **The weights are not included in the repository or
+in the image**: they live in the persistent `ocr-models` volume.
 
-**Descarga automática desde Hugging Face**: si los pesos no están presentes, el
-entrypoint los descarga al arrancar usando `OCR_MODEL_URL` y `OCR_MMPROJ_URL`. Por
-defecto se usa **Qwen2-VL-7B-Instruct (GGUF, Q4_K_M)** más su **`mmproj`**:
+**Automatic download from Hugging Face**: if the weights are not present, the
+entrypoint downloads them on startup using `OCR_MODEL_URL` and `OCR_MMPROJ_URL`.
+By default **Qwen2-VL-7B-Instruct (GGUF, Q4_K_M)** is used plus its **`mmproj`**:
 
 ```dotenv
 OCR_MODEL=Qwen2-VL-7B-Instruct-Q4_K_M
@@ -290,220 +292,222 @@ OCR_CONTEXT_SIZE=8192
 OCR_CONCURRENCY=1
 ```
 
-- Las descargas van a un fichero `.part` y se renombran al completar (reanudables):
-  una interrupción no deja un fichero a medias.
-- Si el fichero **ya existe** en el volumen, no se vuelve a descargar.
-- También puedes **montar los pesos manualmente** en `ocr-models` (p. ej. con
-  `huggingface-cli`) y ajustar las rutas/URLs en `.env`.
-- Si no hay pesos y no se definen URLs, el entrypoint falla con un mensaje claro
-  en lugar de marcarse saludable.
-- El primer arranque descarga varios GB (modelo + proyector); el nombre del volumen
-  puede variar (`<proyecto>_ocr-models`), compruébalo con `docker volume ls`.
+- Downloads go to a `.part` file and are renamed on completion (resumable):
+  an interruption does not leave a half-finished file.
+- If the file **already exists** in the volume, it is not downloaded again.
+- You can also **mount the weights manually** in `ocr-models` (e.g. with
+  `huggingface-cli`) and adjust the paths/URLs in `.env`.
+- If there are no weights and no URLs are defined, the entrypoint fails with a
+  clear message instead of being marked healthy.
+- The first startup downloads several GB (model + projector); the volume name
+  may vary (`<project>_ocr-models`), check it with `docker volume ls`.
 
-**Verificar que el OCR ve imágenes y transcribe una fórmula:**
+**Verify that the OCR sees images and transcribes a formula:**
 
 ```bash
-# 1) Salud del servicio
+# 1) Service health
 docker compose exec ocr curl -fsS http://localhost:8080/health
 
-# 2) Salud + modelo desde el cliente de la aplicación
+# 2) Health + model from the application client
 docker compose exec mcp-server python -c \
   "from taygeta.ingest.ocr_client import build_ocr_client; c=build_ocr_client(); print(c.health(), c.model)"
 
-# 3) Transcripción real de una imagen de prueba
+# 3) Real transcription of a test image
 docker compose exec -T mcp-server python - <<'PY'
 import io
 from PIL import Image, ImageDraw
 from taygeta.ingest.ocr_client import build_ocr_client
 
 img = Image.new("RGB", (640, 140), "white")
-ImageDraw.Draw(img).text((20, 50), "Ecuacion: x^2 + 2x + 1 = 0", fill="black")
+ImageDraw.Draw(img).text((20, 50), "Equation: x^2 + 2x + 1 = 0", fill="black")
 buf = io.BytesIO(); img.save(buf, format="PNG")
 result = build_ocr_client().transcribe_page(buf.getvalue(), page_index=0)
 print(result.text)
 PY
 ```
 
-La respuesta debe ser Markdown/TeX con la fórmula transcrita (y `[ILEGIBLE]` si
-algo no se pudo leer).
+The response must be Markdown/TeX with the formula transcribed (and `[ILEGIBLE]`
+if something could not be read).
 
 ---
 
-## LLM remoto
+## Remote LLM
 
-La estructuración en un solo pase (que también infiere ``course``, ``topic``,
-``subtopic``, ``difficulty`` y ``prerequisites``) y la validación semántica
-(Capa 2) usan un LLM **remoto** compatible con la API de OpenAI, configurado
-**independientemente** del OCR:
+Single-pass structuring (which also infers ``course``, ``topic``, ``subtopic``,
+``difficulty`` and ``prerequisites``) and semantic validation (Layer 2) use a
+**remote** LLM compatible with the OpenAI API, configured **independently** of
+the OCR:
 
 ```dotenv
-LLM_API_KEY=            # SOLO la credencial (sin endpoint ni modelo)
-LLM_BASE_URL=           # p.ej. https://mi-proveedor.example/v1
-LLM_MODEL=              # identificador del modelo elegido por el administrador
+LLM_API_KEY=            # ONLY the credential (no endpoint or model)
+LLM_BASE_URL=           # e.g. https://my-provider.example/v1
+LLM_MODEL=              # identifier of the model chosen by the administrator
 LLM_TIMEOUT_SECONDS=120
 LLM_MAX_RETRIES=2
-LLM_EMBEDDING_MODEL=sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2   # embeddings locales
-DUPLICATE_SIMILARITY_THRESHOLD=0.90          # umbral coseno (0-1) de candidato a duplicado
+LLM_EMBEDDING_MODEL=sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2   # local embeddings
+DUPLICATE_SIMILARITY_THRESHOLD=0.90          # cosine threshold (0-1) for a duplicate candidate
 ```
 
-Diagnóstico:
+Diagnostics:
 
 ```bash
-uv run python -c "from taygeta.core.settings import get_settings; s=get_settings(); print('configurado:', s.llm_configured); s.require_llm()"
+uv run python -c "from taygeta.core.settings import get_settings; s=get_settings(); print('configured:', s.llm_configured); s.require_llm()"
 
-# Comprobar el endpoint (lista de modelos) sin exponer la clave en logs:
+# Check the endpoint (list of models) without exposing the key in logs:
 curl -s "${LLM_BASE_URL%/}/models" -H "Authorization: Bearer ${LLM_API_KEY}" | head
 ```
 
-> No se fija ningún proveedor ni modelo en el código. `LLM_API_KEY` es solo la
-> credencial; no contiene el endpoint, el modelo ni parámetros.
+> No provider or model is fixed in the code. `LLM_API_KEY` is only the
+> credential; it does not contain the endpoint, the model or parameters.
 
-### Deduplicación semántica
+### Semantic deduplication
 
-Además de la deduplicación por hash exacto, la ingesta calcula un **embedding**
-**local** del enunciado y sus alternativas con `sentence-transformers`
-(`LLM_EMBEDDING_MODEL`, sin API externa ni `LLM_API_KEY`) y lo compara por
-similitud coseno contra las preguntas ya almacenadas del mismo curso. Si supera
-`DUPLICATE_SIMILARITY_THRESHOLD`, la pregunta queda marcada como candidata y un
-juez LLM decide si es matemáticamente la misma (ignorando variaciones de
-notación/OCR). Si se confirma, se descarta el texto nuevo y se fusionan los
-`source_reference` y prerrequisitos en la pregunta existente. Nunca se
-almacenan soluciones ni respuestas correctas.
+In addition to exact-hash deduplication, ingestion computes a **local**
+**embedding** of the statement and its choices with `sentence-transformers`
+(`LLM_EMBEDDING_MODEL`, no external API or `LLM_API_KEY`) and compares it by
+cosine similarity against the already stored questions of the same course. If
+it exceeds `DUPLICATE_SIMILARITY_THRESHOLD`, the question is flagged as a
+candidate and an LLM judge decides whether it is mathematically the same
+(ignoring notation/OCR variations). If confirmed, the new text is discarded and
+the `source_reference` and prerequisites are merged into the existing question.
+Solutions and correct answers are never stored.
 
-Los pesos del modelo se descargan/cachean la primera vez que se generan
-embeddings (igual que los del OCR); también puede usarse una ruta local en
+The model weights are downloaded/cached the first time embeddings are generated
+(just like the OCR ones); a local path can also be used in
 `LLM_EMBEDDING_MODEL`.
 
-Para migrar preguntas ya existentes (generar embeddings y fusionar duplicados):
+To migrate already existing questions (generate embeddings and merge duplicates):
 
 ```bash
-uv run python scripts/deduplicate_questions.py --db /ruta/a/taygeta.db --dry-run
-uv run python scripts/deduplicate_questions.py --db /ruta/a/taygeta.db
+uv run python scripts/deduplicate_questions.py --db /path/to/taygeta.db --dry-run
+uv run python scripts/deduplicate_questions.py --db /path/to/taygeta.db
 ```
 
-Si el modelo no está disponible (sin pesos ni red), la deduplicación semántica
-se desactiva de forma controlada y se conserva la de hash exacto.
+If the model is not available (no weights or network), semantic deduplication is
+disabled in a controlled way and exact-hash deduplication is retained.
 
 ---
 
-## Almacenamiento SeaweedFS (S3)
+## SeaweedFS storage (S3)
 
-Las figuras definitivas se guardan como objetos S3 con **ruta relativa estable**
-(`/buckets/{bucket}/{key}`, p. ej. `/buckets/exams/img.png`), nunca como rutas
-locales ni URLs firmadas persistentes. La ruta relativa es portable entre entornos
-y se resuelve a URL completa solo al enviar la información al frontend o al MCP.
+Definitive figures are stored as S3 objects with a **stable relative path**
+(`/buckets/{bucket}/{key}`, e.g. `/buckets/exams/img.png`), never as local paths
+or persistent signed URLs. The relative path is portable across environments and
+is resolved to a full URL only when sending the information to the frontend or
+to MCP.
 
 ```dotenv
-S3_ENDPOINT_URL=http://seaweedfs-s3:8333   # endpoint interno (red Docker)
-S3_PUBLIC_ENDPOINT=http://localhost:8333   # endpoint público para el navegador (UI)
-S3_PUBLIC_BASE_URL=                        # base pública para /buckets/{bucket}/{key}
+S3_ENDPOINT_URL=http://seaweedfs-s3:8333   # internal endpoint (Docker network)
+S3_PUBLIC_ENDPOINT=http://localhost:8333   # public endpoint for the browser (UI)
+S3_PUBLIC_BASE_URL=                        # public base for /buckets/{bucket}/{key}
 S3_BUCKET=taygeta-assets
 S3_ACCESS_KEY_ID=change-me
 S3_SECRET_ACCESS_KEY=change-me
 S3_REGION=us-east-1
-ASSET_PUBLIC_BASE_URL=                     # base pública/proxy opcional (legacy, UI)
+ASSET_PUBLIC_BASE_URL=                     # optional public/proxy base (legacy, UI)
 ASSET_URL_TTL_SECONDS=300
 ```
 
-- **Credenciales de un único origen**: el gateway S3 genera su configuración IAM a
-  partir de `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` del `.env`, de modo que las
-  credenciales de la aplicación y del gateway siempre coinciden. El esquema del
-  fichero IAM queda documentado en `docker/seaweedfs/s3.json.example`.
-  Cámbialas antes de cualquier despliegue no local.
-- **Rutas relativas → URLs públicas**: los modelos almacenan
-  `/buckets/{bucket}/{key}`. Para enviar la información al frontend o al cliente
-  MCP se compone la URL completa concatenando `S3_PUBLIC_BASE_URL`
-  (`build_public_url` en `core/urls.py`); en la UI también puedes usar
-  `ASSET_PUBLIC_BASE_URL`, el endpoint `/assets/{asset_id}` de la aplicación o
-  `S3_PUBLIC_ENDPOINT` (reescritura del host interno). No se reescribe el host de
-  una URL firmada después de generarla (invalidaría la firma).
+- **Single-source credentials**: the S3 gateway generates its IAM configuration
+  from `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` in `.env`, so the application
+  and gateway credentials always match. The IAM file schema is documented in
+  `docker/seaweedfs/s3.json.example`. Change them before any non-local
+  deployment.
+- **Relative paths → public URLs**: the models store
+  `/buckets/{bucket}/{key}`. To send the information to the frontend or the MCP
+  client, the full URL is composed by concatenating `S3_PUBLIC_BASE_URL`
+  (`build_public_url` in `core/urls.py`); in the UI you can also use
+  `ASSET_PUBLIC_BASE_URL`, the application's `/assets/{asset_id}` endpoint or
+  `S3_PUBLIC_ENDPOINT` (internal host rewriting). The host of a signed URL is not
+  rewritten after generating it (it would invalidate the signature).
 
-**Verificar el bucket (crear/leer/borrar un objeto):**
+**Verify the bucket (create/read/delete an object):**
 
 ```bash
 docker compose exec mcp-server python - <<'PY'
 from taygeta.server.object_storage import ObjectStorage
 s = ObjectStorage()
 s.ensure_bucket()
-uri = s.store_asset_bytes(b"prueba", prefix="checks", extension=".txt")
-print("subido:", uri, "existe:", bool(uri))
+uri = s.store_asset_bytes(b"test", prefix="checks", extension=".txt")
+print("uploaded:", uri, "exists:", bool(uri))
 key = uri.split("/", 3)[3]
-print("leido:", s.get_bytes(key))
-s.delete(key); print("borrado:", not s.exists(key))
+print("read:", s.get_bytes(key))
+s.delete(key); print("deleted:", not s.exists(key))
 PY
 ```
 
 ---
 
-## Endpoints HTTP y herramientas MCP
+## HTTP endpoints and MCP tools
 
-Rutas HTTP en el puerto 8000 (`mcp-server`):
+HTTP routes on port 8000 (`mcp-server`):
 
-| Ruta                         | Descripción                                              |
+| Route                        | Description                                              |
 |------------------------------|----------------------------------------------------------|
-| `GET /health`                | Estado para healthchecks.                                |
-| `POST /mcp`                  | Transporte MCP (streamable-http).                        |
-| `GET /download/{filename}`   | Sirve PDFs/ZIP temporales de `/app/downloads` (valida).  |
-| `GET /assets/{asset_id}`     | Devuelve una figura desde SeaweedFS (id validado).       |
+| `GET /health`                | Status for healthchecks.                                 |
+| `POST /mcp`                  | MCP transport (streamable-http).                         |
+| `GET /download/{filename}`   | Serves temporary PDFs/ZIPs from `/app/downloads` (validates). |
+| `GET /assets/{asset_id}`     | Returns a figure from SeaweedFS (validated id).          |
 
-Herramientas FastMCP:
+FastMCP tools:
 
-| Herramienta | Descripción |
+| Tool | Description |
 |---|---|
-| `stage_exam_upload(file_path)` | Procesa un archivo de `uploads/` y crea una sesión de staging. |
-| `refine_staged_question(session_id, q_index, user_hint, manual_overrides)` | Reanaliza con contexto correctivo; conserva overrides. |
-| `confirm_staged_upload(session_id)` | Persiste las preguntas aprobadas (idempotente). |
-| `search_questions(course, topic, difficulty, limit)` | Recuperación RAG por curso/tema/dificultad. |
-| `list_taxonomy()` | Catálogo de cursos, temas, subtemas y prerrequisitos. |
-| `generate_practice_exam(course, topics, difficulty, num_questions)` | Genera y compila un examen en PDF (Typst). |
-| `get_exam_source(exam_id, format)` | ZIP con `main.typ`/`main.tex`, `assets/` y `README.txt`. |
+| `stage_exam_upload(file_path)` | Processes a file from `uploads/` and creates a staging session. |
+| `refine_staged_question(session_id, q_index, user_hint, manual_overrides)` | Re-analyzes with corrective context; preserves overrides. |
+| `confirm_staged_upload(session_id)` | Persists the approved questions (idempotent). |
+| `search_questions(course, topic, difficulty, limit)` | RAG retrieval by course/topic/difficulty. |
+| `list_taxonomy()` | Catalog of courses, topics, subtopics and prerequisites. |
+| `generate_practice_exam(course, topics, difficulty, num_questions)` | Generates and compiles a PDF exam (Typst). |
+| `get_exam_source(exam_id, format)` | ZIP with `main.typ`/`main.tex`, `assets/` and `README.txt`. |
 
-Probar la descarga tras generar un examen:
+Test the download after generating an exam:
 
 ```bash
-EXAM_ID=$(docker compose exec -T mcp-server ... )   # devuelve el exam_id
-curl -fL "http://localhost:8000/download/exams/${EXAM_ID}.pdf" -o examen.pdf
-curl -fL "http://localhost:8000/download/fuente_examen_${EXAM_ID}.zip" -o fuente.zip
+EXAM_ID=$(docker compose exec -T mcp-server ... )   # returns the exam_id
+curl -fL "http://localhost:8000/download/exams/${EXAM_ID}.pdf" -o exam.pdf
+curl -fL "http://localhost:8000/download/exam_source_${EXAM_ID}.zip" -o source.zip
 ```
 
 ---
 
-## Flujo Human-in-the-Loop
+## Human-in-the-Loop workflow
 
-1. **Sube** un PDF/PNG/JPG (UI o `stage_exam_upload`). Se guarda en `uploads/`.
-2. El pipeline ejecuta el doble pase y la validación en dos capas; cada pregunta
-   queda en staging como `VALID` o `NEEDS_ATTENTION` (con motivo técnico).
-3. **Revisa** en la UI: la columna izquierda muestra el enunciado Markdown con su
-   previsualización renderizada, el tipo/alternativas y los metadatos; la
-   columna derecha se dedica a las figuras con dos pestañas, **Figuras** y
-   **Página original** (la página del documento fuente, útil para detectar
-   figuras omitidas). Cada figura puede **eliminarse** (se limpia su `{{fig:N}}`
-   del enunciado) o **recortarse manualmente** dibujando un bounding box sobre
-   la página original; el recorte se sobrescribe en SeaweedFS y la vista previa
-   se refresca al instante. Si el modelo omitió una figura real (falso
-   negativo), **➕ Añadir nueva figura** carga la página completa, permite
-   dibujar el recuadro sobre el gráfico faltante y lo guarda como el siguiente
-   `fig:N` libre, insertando `{{fig:N}}` al final del enunciado para que lo
-   muevas a su lugar.
-4. **Edita** enunciado, tipo, alternativas, dificultad (1–5) y prerrequisitos.
-   Curso y Tema son comboboxes: selecciona un slug del catálogo o usa
-   **✏️ Escribir manualmente...** para crear uno nuevo. Aporta contexto
-   correctivo y pulsa **Reanalizar** si hace falta (todo en el panel de la
-   izquierda, con **Opciones Avanzadas** para el contexto y los prerrequisitos
-   nuevos).
-5. **Confirma** para persistir en `taygeta.db`. La corrección manual prevalece
-   sobre la transcripción automática.
+1. **Upload** a PDF/PNG/JPG (UI or `stage_exam_upload`). It is saved in
+   `uploads/`.
+2. The pipeline runs the two passes and the two-layer validation; each question
+   ends up in staging as `VALID` or `NEEDS_ATTENTION` (with a technical reason).
+3. **Review** in the UI: the left column shows the Markdown statement with its
+   rendered preview, the type/choices and the metadata; the right column is
+   dedicated to the figures with two tabs, **Figures** and **Original page**
+   (the source document page, useful for detecting omitted figures). Each figure
+   can be **deleted** (its `{{fig:N}}` is cleaned from the statement) or
+   **manually cropped** by drawing a bounding box on the original page; the crop
+   is overwritten in SeaweedFS and the preview is refreshed instantly. If the
+   model omitted a real figure (false negative), **➕ Add new figure** loads the
+   full page, lets you draw the box over the missing graphic and saves it as the
+   next free `fig:N`, inserting `{{fig:N}}` at the end of the statement so you
+   can move it to its place.
+4. **Edit** statement, type, choices, difficulty (1–5) and prerequisites.
+   Course and Topic are comboboxes: select a slug from the catalog or use
+   **✏️ Write manually...** to create a new one. Provide corrective context and
+   press **Re-analyze** if needed (all in the left panel, with **Advanced
+   Options** for the context and the new prerequisites).
+5. **Confirm** to persist into `taygeta.db`. Manual correction prevails over
+   automatic transcription.
 
-> Ninguna pregunta se guarda en la base definitiva sin confirmación explícita.
-> Un fallo de OCR o de validación **nunca** se oculta marcando la pregunta como válida.
+> No question is saved into the definitive database without explicit
+> confirmation. An OCR or validation failure is **never** hidden by marking the
+> question as valid.
 
 ---
 
-## Respaldos y restauración
+## Backups and restoration
 
 ### SQLite (`taygeta-data`)
 
-Copia consistente con la API de backup de SQLite (evita copiar con escrituras en vuelo):
+Consistent copy with the SQLite backup API (avoids copying with in-flight
+writes):
 
 ```bash
 docker compose exec -T mcp-server python - <<'PY'
@@ -513,12 +517,12 @@ dst = sqlite3.connect("/app/data/taygeta-backup.db")
 with dst:
     src.backup(dst)
 src.close(); dst.close()
-print("backup creado en /app/data/taygeta-backup.db")
+print("backup created at /app/data/taygeta-backup.db")
 PY
 docker compose cp mcp-server:/app/data/taygeta-backup.db ./taygeta-backup.db
 ```
 
-Restaurar (con el stack parado para evitar escrituras):
+Restore (with the stack stopped to avoid writes):
 
 ```bash
 docker compose stop mcp-server ui
@@ -526,7 +530,7 @@ docker compose cp ./taygeta-backup.db mcp-server:/app/data/taygeta.db
 docker compose start mcp-server ui
 ```
 
-Alternativa por volumen (snapshot en frío):
+Alternative via volume (cold snapshot):
 
 ```bash
 docker compose stop mcp-server ui
@@ -537,7 +541,7 @@ docker compose start mcp-server ui
 
 ### SeaweedFS
 
-Respalda los volúmenes persistentes de master, volume y filer (en frío):
+Back up the persistent volumes of master, volume and filer (cold):
 
 ```bash
 docker compose stop seaweedfs-s3 seaweedfs-filer seaweedfs-volume seaweedfs-master
@@ -548,92 +552,93 @@ done
 docker compose start seaweedfs-master seaweedfs-volume seaweedfs-filer seaweedfs-s3
 ```
 
-Restaurar extrayendo cada `.tgz` en su volumen correspondiente (con los servicios
-parados). El bucket y las credenciales se reconfiguran vía `docker/seaweedfs/s3.json`.
+Restore by extracting each `.tgz` into its corresponding volume (with the
+services stopped). The bucket and credentials are reconfigured via
+`docker/seaweedfs/s3.json`.
 
 ---
 
-## Verificación y pruebas
+## Verification and testing
 
-Comprobaciones estáticas:
+Static checks:
 
 ```bash
 uv run ruff check src
 uv run ruff format --check src
 ```
 
-Verificaciones de integración realizadas durante el desarrollo (contra
-implementaciones reales de SQLite, PyMuPDF, Pandoc y Typst; con dobles solo para
-los servicios externos no desplegados):
+Integration verifications performed during development (against real
+implementations of SQLite, PyMuPDF, Pandoc and Typst; with doubles only for the
+external services that were not deployed):
 
-- **Esquemas**: validación Pydantic v2, slugs `^[a-z0-9_]+$`, dificultad 1–5,
-  correspondencia placeholder/figura y ausencia de campos de solución.
-- **SQLite/FTS5**: inicialización idempotente, sincronización de `questions_fts`
-  en altas/actualizaciones/borrados y consultas parametrizadas.
-- **Extracción**: rasterizado 300 DPI, desnormalización con padding 1.5 %, recorte
-  de figuras, descarte de candidatos que cubren la página completa (escaneos,
-  fondos o dibujos de marco) y re-recorte manual desde la UI.
-- **Transpilador**: conversión TeX→Typst delegada a **tylax** (corpus de oro de
-  fórmulas: fracciones, raíces, matrices `pmatrix`, `cases`, `aligned`, scripts,
-  sumatorias/integrales/límites) y **compilación real** de PDF con Typst.
-- **Pipeline/validación**: clasificación estricta `VALID`/`NEEDS_ATTENTION` y
-  ausencia de respuestas correctas persistidas.
-- **MCP/exámenes**: generación de PDF, ZIP de fuente (Typst y LaTeX) y rutas de
-  descarga; `docker compose config` para base + ROCm + CUDA.
+- **Schemas**: Pydantic v2 validation, slugs `^[a-z0-9_]+$`, difficulty 1–5,
+  placeholder/figure correspondence and absence of solution fields.
+- **SQLite/FTS5**: idempotent initialization, synchronization of `questions_fts`
+  on inserts/updates/deletes and parameterized queries.
+- **Extraction**: 300 DPI rasterization, denormalization with 1.5 % padding,
+  figure cropping, discarding candidates that cover the full page (scans,
+  backgrounds or frame drawings) and manual re-cropping from the UI.
+- **Transpiler**: TeX→Typst conversion delegated to **tylax** (golden corpus of
+  formulas: fractions, roots, `pmatrix` matrices, `cases`, `aligned`, scripts,
+  summations/integrals/limits) and **real PDF compilation** with Typst.
+- **Pipeline/validation**: strict `VALID`/`NEEDS_ATTENTION` classification and
+  absence of persisted correct answers.
+- **MCP/exams**: PDF generation, source ZIP (Typst and LaTeX) and download
+  routes; `docker compose config` for base + ROCm + CUDA.
 
-> La suite automatizada `tests/` (pytest) empieza a incorporar estos casos
-> (sanitización de delimitadores, conversión TeX→Typst con tylax y edición de
-> figuras). Los casos que dependen de GPU o de un proveedor LLM/OCR reales solo
-> pueden completarse en el host de despliegue.
-
----
-
-## Limitaciones actuales
-
-- **Transcripción OCR**: depende del modelo de visión local. Texto o símbolos
-  ilegibles se marcan como `[ILEGIBLE]` y requieren revisión humana; no se inventa
-  contenido.
-- **Conversión TeX → Typst (tylax)**: cubre un amplio catálogo de símbolos y
-  macros LaTeX (~700 símbolos, `\newcommand`/`\def`, matrices, `cases`,
-  fracciones, raíces, scripts, sumatorias/integrales/límites). tylax es **no
-  estricto**: un comando desconocido se conserva como texto crudo (no lanza) y se
-  detecta en la compilación real con Typst (`unknown variable: ...`); ante un
-  LaTeX no analizable, tylax emite un marcador `/* LaTeX Error ... */` que el
-  transpilador eleva a error descriptivo conservando el original.
-- **Espaciado matemático**: tylax separa los átomos de forma estructural, pero
-  casos muy específicos de espaciado pueden diferir visualmente (p. ej.
-  `\text{...}` pierde los espacios de relleno de los extremos).
-- **Alineado (`aligned`)**: tylax emite el alineado nativo de Typst (`&`/`\`);
-  conviene revisar visualmente los casos de más de una columna.
-- **Servicios externos**: la validación semántica y la estructuración requieren un
-  LLM remoto; si no está disponible, las preguntas quedan en `NEEDS_ATTENTION` con
-  el motivo técnico (no se pierden).
-- **Verificación de GPU/modelos**: la detección real de GPU y la transcripción con
-  el modelo descargado deben comprobarse en el host de despliegue.
+> The automated `tests/` suite (pytest) is beginning to incorporate these cases
+> (delimiter sanitization, TeX→Typst conversion with tylax and figure editing).
+> The cases that depend on a GPU or on a real LLM/OCR provider can only be
+> completed on the deployment host.
 
 ---
 
-## Seguridad
+## Current limitations
 
-- **Aislamiento y persistencia**: la base de datos vive en `/app/data`, los
-  documentos en `/app/uploads` y los artefactos temporales en `/app/downloads`;
-  las figuras definitivas viven en SeaweedFS. Nada de esto se versiona en Git.
-- **S3**: el gateway usa credenciales configuradas y no permite lectura pública
-  anónima. No se persisten URLs firmadas; se generan bajo demanda.
-- **Rutas**: las entradas de MCP (archivos de entrada) y las descargas validan que
-  la ruta permanezca dentro del directorio permitido (anti-traversal).
-- **Procesos**: se invocan `pandoc` y `typst` con argumentos en lista, nunca con
-  `shell=True`; la conversión TeX→Typst corre **en proceso** con `tylax`
-  (librería Rust nativa, sin subprocesos adicionales).
-- **Secretos**: `LLM_API_KEY`, credenciales S3 y tokens nunca se imprimen en logs;
-  usa `Settings.safe_summary()` (enmascara secretos) para diagnósticos.
-- **Sin soluciones**: no se almacenan respuestas correctas en la base de datos,
-  staging, RAG, PDFs generados ni en las salidas MCP.
-- **Limpieza**: el limpiador de `/app/downloads` respeta un TTL de 60 minutos y no
-  toca la base de datos, las cargas originales ni los objetos del bucket.
+- **OCR transcription**: depends on the local vision model. Illegible text or
+  symbols are marked as `[ILEGIBLE]` and require human review; content is not
+  invented.
+- **TeX → Typst conversion (tylax)**: covers a broad catalog of LaTeX symbols
+  and macros (~700 symbols, `\newcommand`/`\def`, matrices, `cases`, fractions,
+  roots, scripts, summations/integrals/limits). tylax is **non-strict**: an
+  unknown command is kept as raw text (it does not throw) and is detected during
+  the real compilation with Typst (`unknown variable: ...`); for unparseable
+  LaTeX, tylax emits a `/* LaTeX Error ... */` marker that the transpiler
+  raises to a descriptive error while keeping the original.
+- **Mathematical spacing**: tylax separates atoms structurally, but very
+  specific spacing cases may differ visually (e.g. `\text{...}` loses the
+  padding spaces at the ends).
+- **Alignment (`aligned`)**: tylax emits Typst's native alignment (`&`/`\`); it
+  is advisable to visually review cases with more than one column.
+- **External services**: semantic validation and structuring require a remote
+  LLM; if it is not available, the questions remain in `NEEDS_ATTENTION` with
+  the technical reason (they are not lost).
+- **GPU/model verification**: real GPU detection and transcription with the
+  downloaded model must be checked on the deployment host.
 
 ---
 
-## Licencia
+## Security
 
-Uso propietario (`license = "Proprietary"` en `pyproject.toml`).
+- **Isolation and persistence**: the database lives in `/app/data`, the
+  documents in `/app/uploads` and temporary artifacts in `/app/downloads`;
+  definitive figures live in SeaweedFS. None of this is versioned in Git.
+- **S3**: the gateway uses configured credentials and does not allow anonymous
+  public reading. Signed URLs are not persisted; they are generated on demand.
+- **Paths**: MCP inputs (input files) and downloads validate that the path stays
+  within the allowed directory (anti-traversal).
+- **Processes**: `pandoc` and `typst` are invoked with list arguments, never
+  with `shell=True`; the TeX→Typst conversion runs **in-process** with `tylax`
+  (native Rust library, no extra subprocesses).
+- **Secrets**: `LLM_API_KEY`, S3 credentials and tokens are never printed in
+  logs; use `Settings.safe_summary()` (masks secrets) for diagnostics.
+- **No solutions**: correct answers are not stored in the database, staging,
+  RAG, generated PDFs or MCP outputs.
+- **Cleanup**: the `/app/downloads` cleaner respects a 60-minute TTL and does
+  not touch the database, original uploads or bucket objects.
+
+---
+
+## License
+
+Proprietary use (`license = "Proprietary"` in `pyproject.toml`).

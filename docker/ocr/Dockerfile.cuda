@@ -1,19 +1,19 @@
 # syntax=docker/dockerfile:1
 #
-# Servicio OCR — variante NVIDIA/CUDA (sección 11.3).
-# Construye `llama-server` con backend CUDA y lo ejecuta sobre el runtime CUDA.
+# OCR service — NVIDIA/CUDA variant (section 11.3).
+# Builds `llama-server` with the CUDA backend and runs it on the CUDA runtime.
 #
-# Requisitos del host:
-#   - Driver NVIDIA y NVIDIA Container Toolkit instalados y configurados.
+# Host requirements:
+#   - NVIDIA driver and NVIDIA Container Toolkit installed and configured.
 #   - `docker run --rm --gpus all nvidia/cuda:12.4.1-base-ubuntu22.04 nvidia-smi`
-#     debe listar la GPU antes de levantar el stack.
-# Verificación: `docker compose -f docker-compose.yml -f docker-compose.cuda.yml \
-#   exec ocr llama-server --list-devices` (debe detectar la GPU NVIDIA).
+#     must list the GPU before bringing up the stack.
+# Verification: `docker compose -f docker-compose.yml -f docker-compose.cuda.yml \
+#   exec ocr llama-server --list-devices` (it must detect the NVIDIA GPU).
 
 FROM nvidia/cuda:12.4.1-devel-ubuntu22.04 AS build
 
 ARG LLAMA_CPP_REF=b11559
-# Arquitecturas CUDA a compilar; ajústalas a las GPUs del despliegue.
+# CUDA architectures to compile; adjust them to the deployment GPUs.
 ARG CUDA_ARCHITECTURES="61;70;75;80;86;89"
 ARG DEBIAN_FRONTEND=noninteractive
 
@@ -37,7 +37,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
  && rm -rf /var/lib/apt/lists/*
 
 COPY --from=build /src/build/bin/llama-server /usr/local/bin/llama-server
-# Bibliotecas compartidas de llama.cpp (p. ej. libllama-server-impl.so).
+# llama.cpp shared libraries (e.g. libllama-server-impl.so).
 COPY --from=build /src/build/bin/*.so* /usr/local/lib/
 COPY docker/ocr/entrypoint.sh /usr/local/bin/ocr-entrypoint
 RUN chmod 0755 /usr/local/bin/ocr-entrypoint && ldconfig

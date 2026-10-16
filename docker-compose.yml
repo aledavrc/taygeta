@@ -1,7 +1,7 @@
 # ============================================================================
-# Taygeta — Compose base (sección 12.1). Neutral respecto de GPU: aquí NO se
-# declaran dispositivos, runtimes ni variables específicas de hardware. Usa la
-# variante CPU del servicio OCR, sustituible por los overrides ROCm/CUDA.
+# Taygeta — base Compose (section 12.1). GPU-neutral: here NO
+# hardware-specific devices, runtimes or variables are declared. It uses the
+# CPU variant of the OCR service, replaceable by the ROCm/CUDA overrides.
 # ============================================================================
 name: taygeta
 
@@ -35,8 +35,8 @@ x-app-environment: &app-environment
   UI_PUBLIC_URL: ${UI_PUBLIC_URL:-http://localhost:8501}
   DOWNLOAD_PUBLIC_URL: ${DOWNLOAD_PUBLIC_URL:-http://localhost:8000}
 
-# Volúmenes persistentes comunes a las aplicaciones (nunca assets definitivos:
-# las figuras viven en SeaweedFS).
+# Persistent volumes shared by the applications (never definitive assets:
+# figures live in SeaweedFS).
 x-app-volumes: &app-volumes
   - taygeta-data:/app/data
   - taygeta-uploads:/app/uploads
@@ -91,18 +91,18 @@ services:
       retries: 5
       start_period: 30s
 
-  # Variante CPU neutral. Los overrides ROCm/CUDA sustituyen build/image.
-  # `on-failure:5`: si faltan los pesos, el contenedor termina con un estado
-  # claro en lugar de reiniciarse indefinidamente.
+  # Neutral CPU variant. The ROCm/CUDA overrides replace build/image.
+  # `on-failure:5`: if the weights are missing, the container ends in a clear
+  # state instead of restarting indefinitely.
   ocr:
     build:
       context: .
       dockerfile: docker/ocr/Dockerfile.cpu
     image: taygeta-ocr:cpu
     restart: "on-failure:5"
-    # Solo red interna: la app y la UI lo alcanzan como http://ocr:8080/v1.
-    # Publicarlo en el host provoca "port is already allocated" si algo ocupa el
-    # 8080 y contradice el diseño (el OCR es un servicio interno).
+    # Internal network only: the app and the UI reach it as http://ocr:8080/v1.
+    # Publishing it on the host causes "port is already allocated" if something
+    # occupies 8080 and contradicts the design (OCR is an internal service).
     expose:
       - "8080"
     environment:
@@ -185,12 +185,12 @@ services:
       retries: 10
       start_period: 10s
 
-  # Gateway S3 con credenciales configuradas (no lectura pública anónima).
-  # El host interno estable es seaweedfs-s3:8333.
-  # El fichero IAM se genera en el arranque a partir de S3_ACCESS_KEY_ID /
-  # S3_SECRET_ACCESS_KEY, de modo que las credenciales del gateway y de la
-  # aplicación proceden de la MISMA variable de entorno (.env). El esquema del
-  # fichero queda documentado en docker/seaweedfs/s3.json.example.
+  # S3 gateway with configured credentials (no anonymous public read).
+  # The stable internal host is seaweedfs-s3:8333.
+  # The IAM file is generated at startup from S3_ACCESS_KEY_ID /
+  # S3_SECRET_ACCESS_KEY, so the gateway and application credentials come from
+  # the SAME environment variable (.env). The file schema is documented in
+  # docker/seaweedfs/s3.json.example.
   seaweedfs-s3:
     image: chrislusf/seaweedfs:4.48
     restart: unless-stopped

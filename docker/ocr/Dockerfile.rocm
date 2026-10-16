@@ -1,21 +1,21 @@
 # syntax=docker/dockerfile:1
 #
-# Servicio OCR — variante AMD/ROCm (sección 11.3).
-# Construye `llama-server` con backend HIP. La imagen usa el runtime ROCm, que
-# debe ser compatible con la versión de ROCm instalada en el host.
+# OCR service — AMD/ROCm variant (section 11.3).
+# Builds `llama-server` with the HIP backend. The image uses the ROCm runtime,
+# which must be compatible with the ROCm version installed on the host.
 #
-# Requisitos del host:
-#   - Driver AMD + runtime ROCm compatibles con la imagen base.
-#   - Acceso a /dev/kfd y /dev/dri (lo configura docker-compose.rocm.yml).
-#   - Grupo de usuarios en video/render según la distribución del host.
-# Verificación: `docker compose -f docker-compose.yml -f docker-compose.rocm.yml \
-#   exec ocr llama-server --list-devices` (debe detectar la GPU AMD).
+# Host requirements:
+#   - AMD driver + ROCm runtime compatible with the base image.
+#   - Access to /dev/kfd and /dev/dri (configured by docker-compose.rocm.yml).
+#   - User groups in video/render depending on the host distribution.
+# Verification: `docker compose -f docker-compose.yml -f docker-compose.rocm.yml \
+#   exec ocr llama-server --list-devices` (it must detect the AMD GPU).
 
 FROM rocm/dev-ubuntu-22.04:6.2.2
 
 ARG LLAMA_CPP_REF=b11559
-# Objetivo(s) GPU a compilar. Se inyecta desde docker-compose.rocm.yml
-# (build.args.AMDGPU_TARGETS); por defecto gfx1030 (RX 6800/6800XT/6900XT).
+# GPU target(s) to compile. Injected from docker-compose.rocm.yml
+# (build.args.AMDGPU_TARGETS); defaults to gfx1030 (RX 6800/6800XT/6900XT).
 ARG AMDGPU_TARGETS=gfx1030
 ARG DEBIAN_FRONTEND=noninteractive
 
@@ -32,9 +32,9 @@ RUN cmake -B build -DCMAKE_BUILD_TYPE=Release \
  && cmake --build build --config Release -j"$(nproc)" --target llama-server \
  && install -m 0755 build/bin/llama-server /usr/local/bin/llama-server
 
-# Instala las bibliotecas compartidas de llama.cpp (p. ej.
-# libllama-server-impl.so) en /usr/local/lib y refresca el enlazador dinámico.
-# Se hace en una capa aparte para no invalidar la compilación HIP cacheada.
+# Installs the llama.cpp shared libraries (e.g.
+# libllama-server-impl.so) into /usr/local/lib and refreshes the dynamic linker.
+# It is done in a separate layer so as not to invalidate the cached HIP build.
 RUN cp -a build/bin/*.so* /usr/local/lib/ && ldconfig
 
 COPY docker/ocr/entrypoint.sh /usr/local/bin/ocr-entrypoint

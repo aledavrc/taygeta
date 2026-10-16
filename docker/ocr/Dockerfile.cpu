@@ -1,9 +1,9 @@
 # syntax=docker/dockerfile:1
 #
-# Servicio OCR — variante CPU neutral (sección 11.3).
-# Construye `llama-server` de llama.cpp sin CUDA ni HIP y lo expone como API
-# compatible con OpenAI. Los pesos NO se copian a la imagen: se montan desde el
-# volumen persistente `ocr-models`.
+# OCR service — neutral CPU variant (section 11.3).
+# Builds llama.cpp's `llama-server` without CUDA or HIP and exposes it as an
+# OpenAI-compatible API. The weights are NOT copied into the image: they are
+# mounted from the persistent `ocr-models` volume.
 
 FROM ubuntu:22.04 AS build
 
@@ -29,13 +29,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
  && rm -rf /var/lib/apt/lists/*
 
 COPY --from=build /src/build/bin/llama-server /usr/local/bin/llama-server
-# Bibliotecas compartidas de llama.cpp (p. ej. libllama-server-impl.so).
+# llama.cpp shared libraries (e.g. libllama-server-impl.so).
 COPY --from=build /src/build/bin/*.so* /usr/local/lib/
 COPY docker/ocr/entrypoint.sh /usr/local/bin/ocr-entrypoint
 RUN chmod 0755 /usr/local/bin/ocr-entrypoint && ldconfig
 
 EXPOSE 8080
 
-# El modelo se carga desde el volumen persistente; sin pesos el contenedor
-# presenta un estado claro (falla con mensaje) en lugar de fingir salir sano.
+# The model is loaded from the persistent volume; without weights the container
+# reports a clear state (it fails with a message) instead of pretending to exit healthy.
 ENTRYPOINT ["/usr/local/bin/ocr-entrypoint"]

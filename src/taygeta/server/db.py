@@ -30,6 +30,7 @@ from taygeta.core.embedding import cosine_similarity, decode_embedding, encode_e
 from taygeta.core.schema import compute_canonical_hash, utc_now_iso
 from taygeta.core.settings import Settings, get_settings
 from taygeta.domain.taxonomy import TaxonomyNames
+from taygeta.domain.translation import QuestionTranslation
 from taygeta.i18n import DEFAULT_LOCALE, SUPPORTED_LOCALES, title_case_slug
 from taygeta.server.taxonomy_seed import SEED_LABELS
 
@@ -135,6 +136,28 @@ CREATE VIRTUAL TABLE IF NOT EXISTS questions_fts USING fts5(
     tokenize = 'unicode61 remove_diacritics 2'
 );
 
+-- Copias traducidas por idioma. El enunciado canónico vive en ``questions``;
+-- estas filas son derivadas, no entran en la deduplicación y se borran en
+-- cascada con su pregunta.
+CREATE TABLE IF NOT EXISTS question_translations (
+    question_id  TEXT NOT NULL REFERENCES questions(id) ON DELETE CASCADE,
+    locale       TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    source       TEXT NOT NULL DEFAULT 'llm',
+    created_at   TEXT NOT NULL,
+    PRIMARY KEY (question_id, locale)
+);
+
+CREATE INDEX IF NOT EXISTS idx_question_translations_locale
+    ON question_translations(locale);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS question_translations_fts USING fts5(
+    question_id UNINDEXED,
+    locale UNINDEXED,
+    statement_raw,
+    tokenize = 'unicode61 remove_diacritics 2'
+);
+
 CREATE TABLE IF NOT EXISTS staging_sessions (
     session_id TEXT PRIMARY KEY,
     data_json  TEXT NOT NULL,
@@ -163,6 +186,24 @@ CREATE TRIGGER IF NOT EXISTS questions_au AFTER UPDATE ON questions BEGIN
     DELETE FROM questions_fts WHERE id = old.id;
     INSERT INTO questions_fts(id, statement_raw)
     VALUES (new.id, json_extract(new.payload_json, '$.statement_raw'));
+END;
+
+-- Sincronización FTS5 de las traducciones mediante triggers.
+CREATE TRIGGER IF NOT EXISTS question_translations_ai AFTER INSERT ON question_translations BEGIN
+    INSERT INTO question_translations_fts(question_id, locale, statement_raw)
+    VALUES (new.question_id, new.locale, json_extract(new.payload_json, '$.statement_raw'));
+END;
+
+CREATE TRIGGER IF NOT EXISTS question_translations_ad AFTER DELETE ON question_translations BEGIN
+    DELETE FROM question_translations_fts
+    WHERE question_id = old.question_id AND locale = old.locale;
+END;
+
+CREATE TRIGGER IF NOT EXISTS question_translations_au AFTER UPDATE ON question_translations BEGIN
+    DELETE FROM question_translations_fts
+    WHERE question_id = old.question_id AND locale = old.locale;
+    INSERT INTO question_translations_fts(question_id, locale, statement_raw)
+    VALUES (new.question_id, new.locale, json_extract(new.payload_json, '$.statement_raw'));
 END;
 """
 )
@@ -327,12 +368,18 @@ class Database:
         )
 
     def rebuild_fts(self) -> int:
-        """Regenera ``questions_fts`` desde ``questions`` y devuelve el número de filas."""
+        """Regenera las tablas FTS5 y devuelve el número de filas de preguntas."""
         with self.connect() as connection:
             connection.execute("DELETE FROM questions_fts")
             connection.execute(
                 "INSERT INTO questions_fts(id, statement_raw) "
                 "SELECT id, json_extract(payload_json, '$.statement_raw') FROM questions"
+            )
+            connection.execute("DELETE FROM question_translations_fts")
+            connection.execute(
+                "INSERT INTO question_translations_fts(question_id, locale, statement_raw) "
+                "SELECT question_id, locale, json_extract(payload_json, '$.statement_raw') "
+                "FROM question_translations"
             )
             row = connection.execute("SELECT count(*) AS c FROM questions_fts").fetchone()
         return int(row["c"])
@@ -460,8 +507,11 @@ class Database:
         return EnrichedQuestion.model_validate_json(row["payload_json"])
 
     def delete_question(self, question_id: str) -> bool:
-        """Elimina una pregunta (y su fila FTS5 vía trigger). Devuelve si existía."""
+        """Elimina una pregunta (y sus traducciones y filas FTS vía triggers)."""
         with self.connect() as connection:
+            connection.execute(
+                "DELETE FROM question_translations WHERE question_id = ?", (question_id,)
+            )
             cursor = connection.execute("DELETE FROM questions WHERE id = ?", (question_id,))
         return cursor.rowcount > 0
 
@@ -567,6 +617,75 @@ class Database:
         with self.connect() as connection:
             rows = connection.execute(sql, params).fetchall()
         return [EnrichedQuestion.model_validate_json(row["payload_json"]) for row in rows]
+
+    # -- Traducciones -------------------------------------------------------
+    def upsert_question_translation(self, translation: QuestionTranslation) -> None:
+        """Inserta o actualiza la copia traducida de una pregunta para un idioma."""
+        with self.connect() as connection:
+            connection.execute(
+                "INSERT INTO question_translations"
+                "(question_id, locale, payload_json, source, created_at) "
+                "VALUES (?, ?, ?, ?, ?) "
+                "ON CONFLICT(question_id, locale) DO UPDATE SET "
+                "payload_json = excluded.payload_json, source = excluded.source, "
+                "created_at = excluded.created_at",
+                (
+                    translation.question_id,
+                    translation.locale,
+                    translation.model_dump_json(),
+                    translation.source,
+                    translation.created_at,
+                ),
+            )
+
+    def get_question_translation(self, question_id: str, locale: str) -> QuestionTranslation | None:
+        """Recupera la copia traducida de una pregunta, o ``None`` si no existe."""
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT payload_json FROM question_translations "
+                "WHERE question_id = ? AND locale = ?",
+                (question_id, locale),
+            ).fetchone()
+        if row is None:
+            return None
+        return QuestionTranslation.model_validate_json(row["payload_json"])
+
+    def list_question_translations(self, question_id: str) -> list[QuestionTranslation]:
+        """Lista todas las copias traducidas almacenadas de una pregunta."""
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT payload_json FROM question_translations "
+                "WHERE question_id = ? ORDER BY locale",
+                (question_id,),
+            ).fetchall()
+        return [QuestionTranslation.model_validate_json(row["payload_json"]) for row in rows]
+
+    def delete_question_translations(self, question_id: str) -> int:
+        """Elimina todas las copias traducidas de una pregunta. Devuelve cuántas borró."""
+        with self.connect() as connection:
+            cursor = connection.execute(
+                "DELETE FROM question_translations WHERE question_id = ?", (question_id,)
+            )
+        return cursor.rowcount
+
+    def search_translation_ids(
+        self, query: str, *, locale: str | None = None, limit: int = 20
+    ) -> list[str]:
+        """Ids de preguntas cuyo enunciado traducido coincide con ``query`` (FTS5)."""
+        conditions = ["question_translations_fts MATCH ?"]
+        params: list[Any] = [_build_match_query(query)]
+        if locale is not None:
+            conditions.append("locale = ?")
+            params.append(locale)
+        sql = (
+            "SELECT DISTINCT question_id FROM question_translations_fts "
+            f"WHERE {' AND '.join(conditions)} "
+            "ORDER BY bm25(question_translations_fts) LIMIT ?"
+        )
+        params.append(self._clamp_limit(limit))
+        with self.connect() as connection:
+            rows = connection.execute(sql, params).fetchall()
+        return [row["question_id"] for row in rows]
 
     # -- Taxonomía ----------------------------------------------------------
     def upsert_course(self, slug: str) -> None:

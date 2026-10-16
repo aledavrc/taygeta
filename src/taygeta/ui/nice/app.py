@@ -43,6 +43,7 @@ from taygeta.i18n import get_locale, t
 from taygeta.ingest.pipeline import IngestPipeline
 from taygeta.server.db import Database, DatabaseError
 from taygeta.server.object_storage import ObjectStorage
+from taygeta.server.translation_service import TranslationService
 from taygeta.ui.nice import caption
 from taygeta.ui.nice.localization import (
     install_ui_language,
@@ -160,7 +161,7 @@ def _build_review(
     ui.button(
         t("ui.review.confirm_button"),
         color="primary",
-        on_click=lambda: _confirm(session, panels, database, storage),
+        on_click=lambda: _confirm(session, panels, database, storage, pipeline),
     )
     return panels
 
@@ -217,6 +218,7 @@ def _confirm(
     panels: list[QuestionPanel],
     database: Database,
     storage: ObjectStorage,
+    pipeline: IngestPipeline,
 ) -> None:
     """Recoge los paneles aprobados y persiste las preguntas en SQLite.
 
@@ -288,12 +290,15 @@ def _confirm(
         database,
         storage,
         session_id=result.session_id,
+        translations=TranslationService(database, semantic=pipeline.semantic),
     )
     _purge_orphans(session, set(confirm_result.saved), storage)
     if confirm_result.saved:
         ui.notify(t("ui.review.saved", count=len(confirm_result.saved)), type="positive")
     for error in confirm_result.errors:
         ui.notify(error, type="negative")
+    for warning in confirm_result.warnings:
+        ui.notify(warning, type="warning")
 
 
 def _purge_orphans(session: SessionState, confirmed_ids: set[str], storage: ObjectStorage) -> None:

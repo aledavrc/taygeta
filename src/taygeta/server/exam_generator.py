@@ -131,6 +131,19 @@ class ExamGenerator:
                 mapping[figure.id] = self.local_asset_name(figure)
         return mapping
 
+    # -- Localización -------------------------------------------------------
+    def localized_statement(self, question: EnrichedQuestion, locale: str | None) -> str:
+        """Enunciado en ``locale`` si hay copia traducida validada; si no, el original.
+
+        El enunciado canónico vive en ``questions`` y es el único que participa en
+        la deduplicación; aquí solo se elige la variante de presentación.
+        """
+        if locale:
+            translation = self.database.get_question_translation(question.id, locale)
+            if translation is not None:
+                return translation.statement_raw
+        return question.statement_raw
+
     # -- Plantillas ---------------------------------------------------------
     def build_exam_typst(
         self,
@@ -138,15 +151,15 @@ class ExamGenerator:
         *,
         title: str = "Examen de práctica",
         figure_paths: Mapping[str, str] | None = None,
+        locale: str | None = None,
     ) -> str:
         """Ensambla la fuente Typst del examen a partir de los enunciados."""
         paths = dict(figure_paths or self.figure_paths_map(questions))
         lines = [f"= {title}", ""]
         for index, question in enumerate(questions, start=1):
             lines.append(f"== Pregunta {index}")
-            lines.append(
-                transpiler.markdown_to_typst(question.statement_raw, figure_paths=paths).rstrip()
-            )
+            statement = self.localized_statement(question, locale)
+            lines.append(transpiler.markdown_to_typst(statement, figure_paths=paths).rstrip())
             lines.append("")
         return "\n".join(lines) + "\n"
 
@@ -156,6 +169,7 @@ class ExamGenerator:
         *,
         title: str = "Examen de práctica",
         figure_paths: Mapping[str, str] | None = None,
+        locale: str | None = None,
     ) -> str:
         """Ensambla la fuente LaTeX del examen usando ``\\includegraphics``."""
         paths = dict(figure_paths or self.figure_paths_map(questions))
@@ -171,9 +185,8 @@ class ExamGenerator:
         ]
         for index, question in enumerate(questions, start=1):
             lines.append(f"\\section*{{Pregunta {index}}}")
-            lines.append(
-                transpiler.markdown_to_latex(question.statement_raw, figure_paths=paths).rstrip()
-            )
+            statement = self.localized_statement(question, locale)
+            lines.append(transpiler.markdown_to_latex(statement, figure_paths=paths).rstrip())
         lines.append("\\end{document}")
         return "\n".join(lines) + "\n"
 
@@ -215,9 +228,12 @@ class ExamGenerator:
         exam_id: str | None = None,
         title: str | None = None,
         downloads_dir: str | Path | None = None,
+        locale: str | None = None,
     ) -> ExamResult:
         """Genera y compila un examen de práctica completo.
 
+        ``locale`` selecciona, cuando existe, la copia traducida del enunciado y
+        el nombre de curso localizado; si falta, se usa el enunciado canónico.
         Informa explícitamente si no se recuperaron suficientes preguntas.
         """
         downloads = Path(downloads_dir or self.settings.DOWNLOADS_DIR)
@@ -247,18 +263,19 @@ class ExamGenerator:
         assets_dir.mkdir(parents=True, exist_ok=True)
 
         figure_paths = self.copy_assets(questions, assets_dir)
+        active_locale = locale or DEFAULT_LOCALE
         if title:
             resolved_title = title
         elif course:
             course_name = self.database.get_course_name(
-                course, locale=DEFAULT_LOCALE
-            ) or format_course_name(course, locale=DEFAULT_LOCALE)
+                course, locale=active_locale
+            ) or format_course_name(course, locale=active_locale)
             resolved_title = f"Examen de práctica — {course_name}"
         else:
             resolved_title = "Examen de práctica"
         try:
             typst = self.build_exam_typst(
-                questions, title=resolved_title, figure_paths=figure_paths
+                questions, title=resolved_title, figure_paths=figure_paths, locale=locale
             )
             (source_dir / "main.typ").write_text(typst)
             manifest = {

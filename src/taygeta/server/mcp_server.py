@@ -42,6 +42,7 @@ from taygeta.server.db import Database
 from taygeta.server.deduplication import DeduplicationService
 from taygeta.server.exam_generator import ExamGenerationError, ExamGenerator
 from taygeta.server.object_storage import ObjectStorage, ObjectStorageError
+from taygeta.server.translation_service import TranslationService
 
 logger = logging.getLogger(__name__)
 
@@ -183,9 +184,14 @@ def stage_exam_upload(file_path: str, auto_commit: bool = True) -> str:
         if item.status != STATUS_VALID or item.question is None
     ]
 
+    extra_warnings: list[str] = []
     if auto_commit and result.status == STATUS_VALID and not problems:
-        saved, save_problems = _save_headless(
-            result, database, storage, DeduplicationService(database)
+        saved, save_problems, extra_warnings = _save_headless(
+            result,
+            database,
+            storage,
+            DeduplicationService(database),
+            TranslationService(database, semantic=pipeline.semantic),
         )
         if not save_problems:
             database.update_staging_session(session_id, status="CONFIRMED")
@@ -196,6 +202,7 @@ def stage_exam_upload(file_path: str, auto_commit: bool = True) -> str:
                     "session_id": session_id,
                     "saved": saved,
                     "total": summary["total"],
+                    "warnings": [*result.warnings, *extra_warnings],
                     "message": (
                         f"{len(saved)} pregunta(s) guardadas automáticamente en la base de datos."
                     ),
@@ -221,7 +228,7 @@ def stage_exam_upload(file_path: str, auto_commit: bool = True) -> str:
             "valid": summary["valid"],
             "needs_attention": summary["needs_attention"],
             "problems": problems,
-            "warnings": result.warnings,
+            "warnings": [*result.warnings, *extra_warnings],
             "message": message,
         }
     )
@@ -320,6 +327,8 @@ def confirm_staged_upload(session_id: str) -> str:
         saved: list[str] = []
         skipped: list[str] = []
         errors: list[str] = []
+        warnings: list[str] = []
+        translations = TranslationService(database, semantic=_pipeline.semantic)
         for item in session["data"].get("questions", []):
             if item.get("status") != STATUS_VALID:
                 skipped.append(f"{item.get('question', {}).get('id', '?')} (no VALID)")
@@ -341,6 +350,7 @@ def confirm_staged_upload(session_id: str) -> str:
                     question,
                 )
                 database.upsert_question(question, embedding=dedup.embed_question(question))
+                warnings.extend(translations.store(question).problems)
                 saved.append(question.id)
             except Exception as exc:  # noqa: BLE001
                 errors.append(f"{payload.get('id', '?')}: {exc}")
@@ -353,6 +363,7 @@ def confirm_staged_upload(session_id: str) -> str:
                 "saved": saved,
                 "skipped": skipped,
                 "errors": errors,
+                "warnings": warnings,
             }
         )
     except Exception as exc:  # noqa: BLE001
@@ -507,15 +518,18 @@ def _save_headless(
     database: Database,
     storage: ObjectStorage,
     dedup: DeduplicationService,
-) -> tuple[list[str], list[dict[str, Any]]]:
+    translations: TranslationService,
+) -> tuple[list[str], list[dict[str, Any]], list[str]]:
     """Persiste automáticamente las preguntas VALID de una ingesta headless.
 
     Usa :class:`DeduplicationService` para detectar duplicados semánticos (por
     embeddings y, opcionalmente, juez LLM) y captura cualquier excepción como
-    ``ERROR``. Devuelve los ids guardados y la lista de incidencias.
+    ``ERROR``. Devuelve los ids guardados, la lista de incidencias y una lista de
+    advertencias (p. ej. traducciones que no se pudieron generar o validar).
     """
     saved: list[str] = []
     problems: list[dict[str, Any]] = []
+    warnings: list[str] = []
     for item in result.questions:
         question = item.question
         if item.status != STATUS_VALID or question is None:
@@ -556,7 +570,8 @@ def _save_headless(
             )
         else:
             saved.append(question.id)
-    return saved, problems
+            warnings.extend(translations.store(enriched).problems)
+    return saved, problems, warnings
 
 
 def _enrich(payload: dict[str, Any], storage: ObjectStorage) -> EnrichedQuestion | None:

@@ -44,6 +44,7 @@ from taygeta.ingest.image_extractor import (
 )
 from taygeta.server.db import Database, DatabaseError
 from taygeta.server.object_storage import ObjectStorage, ObjectStorageError
+from taygeta.server.translation_service import TranslationService
 
 logger = logging.getLogger(__name__)
 
@@ -292,6 +293,7 @@ class ConfirmResult:
 
     saved: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
@@ -325,6 +327,7 @@ def persist_approved_questions(
     *,
     session_id: str | None = None,
     embedder: Embedder | None = None,
+    translations: TranslationService | None = None,
 ) -> ConfirmResult:
     """Persiste las preguntas aprobadas tras verificar sus figuras en el bucket.
 
@@ -332,7 +335,8 @@ def persist_approved_questions(
     la sesión de staging como ``CONFIRMED`` cuando ha guardado alguna pregunta.
     Genera (best-effort) el embedding de cada pregunta para la deduplicación
     semántica posterior; si el proveedor no está disponible, se omite sin
-    bloquear la confirmación.
+    bloquear la confirmación. Con ``translations`` genera y almacena además las
+    copias es/en, reportando cualquier problema como advertencia.
     """
     if embedder is None:
         embedder = Embedder(get_settings())
@@ -352,6 +356,8 @@ def persist_approved_questions(
             database.add_prerequisites(list(question.prerequisites))
             database.upsert_question(question, embedding=_embed_or_none(embedder, question))
             result.saved.append(question.id)
+            if translations is not None:
+                result.warnings.extend(translations.store(question).problems)
         except Exception as exc:  # noqa: BLE001 - se informa al usuario, no se oculta
             result.errors.append(f"{question.id}: {exc}")
 

@@ -19,6 +19,7 @@ pero no se guardan definitivamente hasta la confirmación humana.
 from __future__ import annotations
 
 import re
+from collections import Counter
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -27,6 +28,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from taygeta.core.schema import PLACEHOLDER_PATTERN, QuestionRaw
 from taygeta.core.settings import Settings, get_settings
+from taygeta.domain.translation import QuestionTranslation
 
 if TYPE_CHECKING:
     import instructor  # noqa: F401
@@ -43,6 +45,7 @@ __all__ = [
     "RemoteValidationError",
     "SemanticValidator",
     "validate_local",
+    "validate_translation",
 ]
 
 #: Estados de staging admitidos para las preguntas.
@@ -298,6 +301,110 @@ def validate_local(
     issues.extend(_check_required_fields(question))
     checks["required_fields"] = not any(issue.code.endswith("empty") for issue in issues)
     add("duplicate_choices", _check_duplicate_choices(question))
+
+    is_valid = not any(issue.severity == SEVERITY_ERROR for issue in issues)
+    return LocalValidationResult(is_valid=is_valid, issues=issues, checks=checks)
+
+
+def _extract_math_spans(text: str) -> list[str]:
+    """Extrae el contenido de todos los tramos matemáticos ``$...$`` y ``$$...$$``."""
+    spans: list[str] = []
+    index = 0
+    length = len(text)
+    while index < length:
+        if text[index : index + 2] == "$$":
+            end = text.find("$$", index + 2)
+            if end == -1:
+                break
+            spans.append(text[index + 2 : end].strip())
+            index = end + 2
+            continue
+        if text[index] == "$" and not (index > 0 and text[index - 1] == "\\"):
+            end = text.find("$", index + 1)
+            if end == -1:
+                break
+            spans.append(text[index + 1 : end].strip())
+            index = end + 1
+            continue
+        index += 1
+    return spans
+
+
+def _check_math_preserved(source_text: str, translated_text: str) -> LocalIssue | None:
+    """Verifica que la traducción conserve intactas todas las expresiones TeX.
+
+    La traducción solo debe afectar a la prosa: cada expresión matemática
+    ``$...$`` / ``$$...$$`` debe permanecer byte a byte igual (el orden puede
+    variar). Un desajuste indica que el modelo alteró o tradujo las fórmulas.
+    """
+    if Counter(_extract_math_spans(source_text)) == Counter(_extract_math_spans(translated_text)):
+        return None
+    return LocalIssue(
+        code="math_not_preserved",
+        message="las expresiones matemáticas ($...$ / $$...$$) deben conservarse idénticas",
+    )
+
+
+def _check_translation_choices(
+    source: QuestionRaw, translation: QuestionTranslation
+) -> LocalIssue | None:
+    """Verifica que las alternativas traducidas conserven ids y orden del original."""
+    source_ids = [choice.id for choice in (source.choices or [])]
+    translated_ids = [choice.id for choice in (translation.choices or [])]
+    if source_ids == translated_ids:
+        return None
+    return LocalIssue(
+        code="translation_choices_mismatch",
+        message=(
+            "las alternativas traducidas deben conservar los ids y el orden del "
+            f"original ({source_ids}); se recibió {translated_ids}"
+        ),
+    )
+
+
+def validate_translation(
+    source: QuestionRaw,
+    translation: QuestionTranslation,
+    *,
+    min_statement_length: int = MIN_STATEMENT_LENGTH,
+) -> LocalValidationResult:
+    """Valida una copia traducida con la misma heurística local que el original.
+
+    Comprueba delimitadores y llaves balanceados, concordancia placeholder/figura
+    (contra las figuras del original), conservación exacta de las expresiones TeX
+    y alineación de alternativas. No detecta soluciones: el esquema ya las prohíbe.
+    """
+    issues: list[LocalIssue] = []
+    checks: dict[str, bool] = {}
+
+    translated_text = (
+        translation.statement_raw
+        + "\n"
+        + "\n".join(choice.content_raw for choice in (translation.choices or []))
+    )
+    source_text = (
+        source.statement_raw
+        + "\n"
+        + "\n".join(choice.content_raw for choice in (source.choices or []))
+    )
+    choices_text = "\n".join(choice.content_raw for choice in (translation.choices or []))
+    figure_ids = {figure.id for figure in source.figures}
+
+    def add(code: str, issue: LocalIssue | None) -> None:
+        checks[code] = issue is None
+        if issue is not None:
+            issues.append(issue)
+
+    if min_statement_length > 0:
+        add("min_length", _check_min_length(translation.statement_raw, min_statement_length))
+    add("math_delimiters", _check_math_delimiters(translation.statement_raw, choices_text))
+    add("braces", _check_braces(translation.statement_raw, choices_text))
+    add(
+        "placeholder_figure_match",
+        _check_placeholder_figure_match(translation.statement_raw, choices_text, figure_ids),
+    )
+    add("math_preserved", _check_math_preserved(source_text, translated_text))
+    add("choices_aligned", _check_translation_choices(source, translation))
 
     is_valid = not any(issue.severity == SEVERITY_ERROR for issue in issues)
     return LocalValidationResult(is_valid=is_valid, issues=issues, checks=checks)

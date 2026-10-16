@@ -710,6 +710,7 @@ class QuestionPanel:
         question = staged.question
         if question is None:
             return
+        self.staged = staged
         self.base = question
         self.qstate.figures = [
             figure if isinstance(figure, dict) else figure.model_dump(mode="json")

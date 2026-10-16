@@ -38,7 +38,7 @@ from taygeta.core.schema import (
     sanitize_math_delimiters,
 )
 from taygeta.core.settings import Settings, get_settings
-from taygeta.domain.taxonomy import format_course_name
+from taygeta.domain.taxonomy import TaxonomyNames, filter_taxonomy_names, format_course_name
 from taygeta.i18n import get_locale, t
 from taygeta.ingest.pipeline import IngestPipeline
 from taygeta.server.db import Database, DatabaseError
@@ -227,7 +227,7 @@ def _confirm(
     result = session.staging
     if result is None:
         return
-    approved: list[tuple[EnrichedQuestion, list[str]]] = []
+    approved: list[tuple[EnrichedQuestion, list[str], list[TaxonomyNames]]] = []
     _drafts: list[PanelDraft] = []
     for panel in panels:
         draft = panel.collect()
@@ -254,21 +254,29 @@ def _confirm(
                 "choices": draft.choices,
             }
         )
-        approved.append((approved_question, draft.new_prereqs))
+        names = filter_taxonomy_names(
+            panel.staged.taxonomy_names,
+            course=approved_question.course,
+            topic=approved_question.topic,
+            subtopic=approved_question.subtopic,
+            prerequisites=approved_question.prerequisites,
+        )
+        approved.append((approved_question, draft.new_prereqs, names))
     if not approved:
         ui.notify(t("ui.review.nothing_approved"), type="warning")
         return
     invalid = [
-        q for q, _ in approved if not _SLUG_RE.match(q.course) or not _SLUG_RE.match(q.topic)
+        q for q, _, _ in approved if not _SLUG_RE.match(q.course) or not _SLUG_RE.match(q.topic)
     ]
     if invalid:
         ui.notify(t("ui.review.invalid_slugs"), type="negative")
         return
-    new_tags = sorted({slug for _, slugs in approved for slug in slugs})
+    new_tags = sorted({slug for _, slugs, _ in approved for slug in slugs})
     try:
-        for question, _ in approved:
+        for question, _, names in approved:
             database.upsert_course(question.course)
             database.upsert_topic(question.course, question.topic, question.subtopic)
+            database.upsert_taxonomy_names(names)
         if new_tags:
             database.add_prerequisites(new_tags)
     except DatabaseError as exc:
@@ -276,7 +284,7 @@ def _confirm(
         return
     invalidate_taxonomy_names()
     confirm_result = persist_approved_questions(
-        [question for question, _ in approved],
+        [question for question, _, _ in approved],
         database,
         storage,
         session_id=result.session_id,

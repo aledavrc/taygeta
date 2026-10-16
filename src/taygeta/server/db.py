@@ -21,7 +21,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import uuid
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterable, Iterator, Sequence
 from contextlib import contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -29,6 +29,7 @@ from typing import TYPE_CHECKING, Any
 from taygeta.core.embedding import cosine_similarity, decode_embedding, encode_embedding
 from taygeta.core.schema import compute_canonical_hash, utc_now_iso
 from taygeta.core.settings import Settings, get_settings
+from taygeta.domain.taxonomy import TaxonomyNames
 from taygeta.i18n import DEFAULT_LOCALE, SUPPORTED_LOCALES, title_case_slug
 from taygeta.server.taxonomy_seed import SEED_LABELS
 
@@ -624,6 +625,27 @@ class Database:
                 (locale,),
             ).fetchall()
         return {(row["kind"], row["parent_slug"], row["slug"]): row["label"] for row in rows}
+
+    def upsert_taxonomy_names(self, names: Iterable[TaxonomyNames], *, source: str = "llm") -> int:
+        """Persiste nombres localizados (es/en) generados por el LLM.
+
+        Escribe cada idioma como un label independiente respetando la precedencia
+        (manual > seed > llm), de modo que un nombre generado nunca pisa uno
+        sembrado o editado a mano. Devuelve cuántas filas se intentaron escribir.
+        """
+        written = 0
+        for entry in names:
+            for locale, label in entry.locale_labels():
+                self.upsert_taxonomy_label(
+                    entry.kind,
+                    entry.slug,
+                    label,
+                    locale=locale,
+                    parent_slug=entry.parent_slug,
+                    source=source,
+                )
+                written += 1
+        return written
 
     def upsert_topic(
         self,

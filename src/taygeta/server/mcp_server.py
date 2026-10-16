@@ -35,6 +35,7 @@ from taygeta.core.schema import (
 )
 from taygeta.core.settings import Settings, get_settings
 from taygeta.core.urls import build_public_url, build_relative_path, split_asset_reference
+from taygeta.domain.taxonomy import TaxonomyNames, filter_taxonomy_names
 from taygeta.ingest.pipeline import IngestPipeline, StagingResult
 from taygeta.ingest.validator import STATUS_NEEDS_ATTENTION, STATUS_VALID
 from taygeta.server.db import Database
@@ -270,7 +271,9 @@ def refine_staged_question(
         if refined.question is not None:
             refined.question = _apply_overrides(refined.question, raw_overrides)
             refined = pipeline.validate_question(
-                refined.question, max_pages=len(intermediate.pages) or None
+                refined.question,
+                max_pages=len(intermediate.pages) or None,
+                taxonomy_names=refined.taxonomy_names,
             )
             payload = refined.question.model_dump()
             payload.update(curricular)
@@ -281,6 +284,7 @@ def refine_staged_question(
             "status": refined.status,
             "reasons": refined.reasons,
             "question": payload,
+            "taxonomy_names": [names.model_dump() for names in refined.taxonomy_names],
         }
         data["questions"] = questions
         database.update_staging_session(session_id, data=data)
@@ -331,6 +335,11 @@ def confirm_staged_upload(session_id: str) -> str:
                 database.add_prerequisites(list(question.prerequisites))
                 database.upsert_course(question.course)
                 database.upsert_topic(question.course, question.topic, question.subtopic)
+                _persist_taxonomy_names(
+                    database,
+                    _taxonomy_names_from_payload(item.get("taxonomy_names")),
+                    question,
+                )
                 database.upsert_question(question, embedding=dedup.embed_question(question))
                 saved.append(question.id)
             except Exception as exc:  # noqa: BLE001
@@ -452,6 +461,47 @@ def _intermediate_from_session(data: dict[str, Any]) -> TranscriptionIntermediat
     )
 
 
+def _taxonomy_names_from_payload(payload: Any) -> list[TaxonomyNames]:
+    """Reconstruye nombres de taxonomía desde un payload de staging (tolerante).
+
+    Los nombres son datos de presentación opcionales: una entrada malformada se
+    descarta en lugar de invalidar la confirmación.
+    """
+    if not isinstance(payload, list):
+        return []
+    names: list[TaxonomyNames] = []
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        try:
+            names.append(TaxonomyNames.model_validate(item))
+        except Exception:  # noqa: BLE001 - presentación opcional, nunca bloquea
+            continue
+    return names
+
+
+def _persist_taxonomy_names(
+    database: Database,
+    names: list[TaxonomyNames],
+    question: EnrichedQuestion,
+) -> None:
+    """Persiste los nombres del LLM que aún coinciden con la clasificación final.
+
+    Se escribe con ``source='llm'`` para no pisar nombres sembrados o editados a
+    mano. Los nombres de entradas cuya clasificación cambió durante la revisión se
+    descartan.
+    """
+    applicable = filter_taxonomy_names(
+        names,
+        course=question.course,
+        topic=question.topic,
+        subtopic=question.subtopic,
+        prerequisites=question.prerequisites,
+    )
+    if applicable:
+        database.upsert_taxonomy_names(applicable)
+
+
 def _save_headless(
     result: StagingResult,
     database: Database,
@@ -491,6 +541,7 @@ def _save_headless(
             database.add_prerequisites(list(enriched.prerequisites))
             database.upsert_course(enriched.course)
             database.upsert_topic(enriched.course, enriched.topic, enriched.subtopic)
+            _persist_taxonomy_names(database, item.taxonomy_names, enriched)
             outcome = dedup.ingest(enriched)
         except Exception as exc:  # noqa: BLE001
             problems.append({"id": question.id, "status": "ERROR", "reasons": [str(exc)]})

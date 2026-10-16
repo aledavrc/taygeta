@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
@@ -28,6 +29,7 @@ from typing import Any, Literal
 from taygeta.agents.structurer import Structurer, StructuringError
 from taygeta.core.schema import EnrichedQuestion, FigureReference, TranscriptionIntermediate
 from taygeta.core.settings import Settings, get_settings
+from taygeta.domain.taxonomy import TaxonomyNames
 from taygeta.ingest.image_extractor import (
     DEFAULT_DPI,
     assign_figure_ids,
@@ -75,6 +77,7 @@ class StagedQuestion:
     reasons: list[str] = field(default_factory=list)
     local: LocalValidationResult | None = None
     logical: LogicalValidationResult | None = None
+    taxonomy_names: list[TaxonomyNames] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -241,7 +244,11 @@ class IngestPipeline:
                     )
                 )
                 continue
-            staged.append(self.validate_question(item.question, max_pages=len(rasters)))
+            staged.append(
+                self.validate_question(
+                    item.question, max_pages=len(rasters), taxonomy_names=item.taxonomy_names
+                )
+            )
 
         overall = (
             STATUS_VALID
@@ -258,9 +265,17 @@ class IngestPipeline:
         return self._finish(result, persist_staging, session_id)
 
     def validate_question(
-        self, question: EnrichedQuestion, *, max_pages: int | None = None
+        self,
+        question: EnrichedQuestion,
+        *,
+        max_pages: int | None = None,
+        taxonomy_names: Sequence[TaxonomyNames] | None = None,
     ) -> StagedQuestion:
-        """Ejecuta las dos capas de validación sobre una pregunta y la clasifica."""
+        """Ejecuta las dos capas de validación sobre una pregunta y la clasifica.
+
+        ``taxonomy_names`` transporta los nombres legibles (es/en) generados por
+        el LLM para que sobrevivan hasta la confirmación y se persistan entonces.
+        """
         local = validate_local(question, max_pages=max_pages)
         reasons: list[str] = []
 
@@ -285,6 +300,7 @@ class IngestPipeline:
             reasons=reasons,
             local=local,
             logical=logical,
+            taxonomy_names=list(taxonomy_names or []),
         )
 
     def refine_question(
@@ -310,7 +326,9 @@ class IngestPipeline:
                 reasons=[refined.error or "el reanálisis no produjo una pregunta válida"],
             )
         max_pages = len(intermediate.pages) or None
-        return self.validate_question(refined.question, max_pages=max_pages)
+        return self.validate_question(
+            refined.question, max_pages=max_pages, taxonomy_names=refined.taxonomy_names
+        )
 
     # -- Internos -----------------------------------------------------------
     def _detect_and_store_figures(
@@ -392,6 +410,7 @@ class IngestPipeline:
                     "status": item.status,
                     "reasons": item.reasons,
                     "question": item.question.model_dump() if item.question else None,
+                    "taxonomy_names": [names.model_dump() for names in item.taxonomy_names],
                 }
                 for item in result.questions
             ],

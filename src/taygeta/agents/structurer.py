@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from openai import OpenAI
@@ -42,22 +42,51 @@ from taygeta.core.schema import (
     utc_now_iso,
 )
 from taygeta.core.settings import Settings, get_settings
+from taygeta.domain.taxonomy import TaxonomyKind, TaxonomyNames
+from taygeta.i18n import SUPPORTED_LOCALES
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["QuestionDraft", "StructuredQuestion", "Structurer", "StructuringError"]
+__all__ = [
+    "LocalizedName",
+    "PrerequisiteName",
+    "QuestionDraft",
+    "StructuredQuestion",
+    "Structurer",
+    "StructuringError",
+]
 
 _PLACEHOLDER_RE = re.compile(PLACEHOLDER_PATTERN)
 
 
+def _names_suffix(
+    names: dict[tuple[str, str, str], dict[str, str]] | None,
+    kind: str,
+    parent_slug: str,
+    slug: str,
+) -> str:
+    """Formatea los nombres localizados existentes como sufijo de grounding."""
+    if not names:
+        return ""
+    entry = names.get((kind, parent_slug, slug))
+    if not entry:
+        return ""
+    parts = [f'{locale}: "{label}"' for locale, label in entry.items() if label]
+    return f" ({', '.join(parts)})" if parts else ""
+
+
 def _build_dynamic_curriculum_prompt(
     taxonomy_tree: dict[str, dict[str, list[str]]],
+    names: dict[tuple[str, str, str], dict[str, str]] | None = None,
 ) -> str:
     """Formatea la taxonomía curricular viva como texto de grounding para el LLM.
 
     Recibe el árbol ``curso -> tema -> subtemas`` reconstruido desde la base de
     datos y lo convierte en un catálogo legible que el LLM debe reutilizar de
-    forma estricta para canonicalizar ``course``, ``topic`` y ``subtopic``.
+    forma estricta para canonicalizar ``course``, ``topic`` y ``subtopic``. Si se
+    aportan ``names`` (``(kind, parent_slug, slug) -> {locale: label}``), cada slug
+    se anota con sus nombres localizados ya existentes para que el LLM los
+    reutilice en vez de inventar variantes.
     """
     header = (
         "CATÁLOGO DE CURSOS Y TEMAS QUE YA EXISTEN EN LA BASE DE DATOS:\n"
@@ -74,22 +103,32 @@ def _build_dynamic_curriculum_prompt(
     lines: list[str] = [header]
     for course in sorted(taxonomy_tree):
         topics = taxonomy_tree[course]
-        topic_desc = ", ".join(f"`{topic}`" for topic in sorted(topics))
-        lines.append(f"- Curso: `{course}` -> Temas: {topic_desc}")
+        course_suffix = _names_suffix(names, "course", "", course)
+        topic_desc = ", ".join(
+            f"`{topic}`{_names_suffix(names, 'topic', course, topic)}" for topic in sorted(topics)
+        )
+        lines.append(f"- Curso: `{course}`{course_suffix} -> Temas: {topic_desc}")
         for topic in sorted(topics):
             subtopics = sorted(topics[topic])
             if subtopics:
-                subtopic_desc = ", ".join(f"`{subtopic}`" for subtopic in subtopics)
+                subtopic_desc = ", ".join(
+                    f"`{subtopic}`{_names_suffix(names, 'subtopic', course, subtopic)}"
+                    for subtopic in subtopics
+                )
                 lines.append(f"    - `{course}` / `{topic}` -> Subtemas: {subtopic_desc}")
     return "\n".join(lines)
 
 
-def _build_dynamic_prerequisites_prompt(prerequisites: list[str]) -> str:
+def _build_dynamic_prerequisites_prompt(
+    prerequisites: list[str],
+    names: dict[tuple[str, str, str], dict[str, str]] | None = None,
+) -> str:
     """Formatea el catálogo vivo de prerrequisitos como texto de grounding.
 
     Los slugs provienen de la base de datos (tabla ``prerequisites``), de modo
     que el LLM reutilice el vocabulario ya existente antes de acuñar conceptos
-    nuevos. Si el catálogo está vacío, lo indica explícitamente.
+    nuevos. Si el catálogo está vacío, lo indica explícitamente. Cuando se
+    aportan ``names``, cada slug se anota con sus nombres localizados existentes.
     """
     header = (
         "CATÁLOGO DE PRERREQUISITOS QUE YA EXISTEN EN LA BASE DE DATOS:\n"
@@ -102,7 +141,10 @@ def _build_dynamic_prerequisites_prompt(prerequisites: list[str]) -> str:
             header + "\n(El catálogo está vacío: aún no hay prerrequisitos confirmados en la "
             "base de datos; puedes proponer slugs nuevos en snake_case.)"
         )
-    formatted_slugs = "\n".join(f"- `{slug}`" for slug in sorted(set(prerequisites)))
+    formatted_slugs = "\n".join(
+        f"- `{slug}`{_names_suffix(names, 'prerequisite', '', slug)}"
+        for slug in sorted(set(prerequisites))
+    )
     return header + "\n" + formatted_slugs
 
 
@@ -145,6 +187,12 @@ el slug del catálogo.
    c. NUEVOS CONCEPTOS: Solo si el concepto matemático no tiene ninguna \
 equivalencia en el catálogo, acuña un nuevo slug conciso en snake_case \
 (preferentemente en singular, sin artículos innecesarios).
+10. localization: for every taxonomy entry you emit, also provide human-readable \
+DISPLAY NAMES in Spanish and English — course_name, topic_name, subtopic_name \
+(null when there is no subtopic) and prerequisite_names (one entry per \
+prerequisite, each with its slug, es and en). Names are presentation only: keep \
+the slugs unchanged, NEVER include solutions or answers, and reuse the existing \
+localized names shown in the catalog below whenever a slug already has one.
 
 No resuelvas el ejercicio, no añadas soluciones ni respuestas correctas y no \
 inventes datos que no se deduzcan del enunciado.
@@ -190,10 +238,31 @@ el slug del catálogo.
    c. NUEVOS CONCEPTOS: Solo si el concepto matemático no tiene ninguna \
 equivalencia en el catálogo, acuña un nuevo slug conciso en snake_case \
 (preferentemente en singular, sin artículos innecesarios).
+10. localization: for every taxonomy entry you emit, also provide human-readable \
+DISPLAY NAMES in Spanish and English — course_name, topic_name, subtopic_name \
+(null when there is no subtopic) and prerequisite_names (one entry per \
+prerequisite, each with its slug, es and en). Names are presentation only: keep \
+the slugs unchanged, NEVER include solutions or answers, and reuse the existing \
+localized names shown in the catalog below whenever a slug already has one.
 
 No resuelvas el ejercicio, no añadas soluciones ni respuestas correctas y no \
 inventes datos que no se deduzcan del enunciado.
 """
+
+
+class LocalizedName(BaseModel):
+    """Nombre legible (es/en) de una entrada de taxonomía emitido por el LLM."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    es: str = Field(..., min_length=1, description="Nombre legible en español.")
+    en: str = Field(..., min_length=1, description="Nombre legible en inglés.")
+
+
+class PrerequisiteName(LocalizedName):
+    """Nombre legible de un prerrequisito, vinculado a su slug."""
+
+    slug: str = Field(..., min_length=1, description="Slug del prerrequisito nombrado.")
 
 
 class QuestionDraft(BaseModel):
@@ -215,6 +284,18 @@ class QuestionDraft(BaseModel):
     difficulty: int = Field(..., ge=1, le=5, description="Dificultad estimada 1-5.")
     prerequisites: list[Slug] = Field(
         default_factory=list, description="Slugs de conceptos previos."
+    )
+    course_name: LocalizedName | None = Field(
+        default=None, description="Nombre legible del curso (es/en)."
+    )
+    topic_name: LocalizedName | None = Field(
+        default=None, description="Nombre legible del tema (es/en)."
+    )
+    subtopic_name: LocalizedName | None = Field(
+        default=None, description="Nombre legible del subtema (es/en), o null."
+    )
+    prerequisite_names: list[PrerequisiteName] = Field(
+        default_factory=list, description="Nombres legibles (es/en) de los prerrequisitos."
     )
 
     @field_validator("course", "topic", mode="before")
@@ -259,6 +340,7 @@ class StructuredQuestion:
 
     question: EnrichedQuestion | None
     error: str | None = None
+    taxonomy_names: list[TaxonomyNames] = field(default_factory=list)
 
 
 class StructuringError(RuntimeError):
@@ -340,20 +422,43 @@ class Structurer:
             return []
         return [str(row["slug"]) for row in rows if row.get("slug")]
 
+    def _live_taxonomy_names(self) -> dict[tuple[str, str, str], dict[str, str]]:
+        """Lee los nombres localizados ya existentes de la base de datos.
+
+        Devuelve un mapa ``(kind, parent_slug, slug) -> {locale: label}`` para que
+        el LLM reutilice los nombres conocidos en vez de inventar variantes.
+        """
+        if self.database is None or not hasattr(self.database, "taxonomy_label_map"):
+            return {}
+        names: dict[tuple[str, str, str], dict[str, str]] = {}
+        try:
+            for locale in SUPPORTED_LOCALES:
+                for key, label in self.database.taxonomy_label_map(locale=locale).items():
+                    names.setdefault(key, {})[locale] = label
+        except Exception:  # noqa: BLE001 - el grounding es opcional, nunca bloquea
+            logger.warning(
+                "no se pudieron leer los nombres de taxonomía de la base de datos",
+                exc_info=True,
+            )
+            return {}
+        return names
+
     def _build_system_prompt(self, *, refining: bool) -> str:
         """Ensambla el system prompt dinámicamente con la taxonomía viva de la BD.
 
         Parte de las reglas estáticas de formato y les adjunta el catálogo de
         cursos/temas/subtemas y de prerrequisitos leídos en vivo, de modo que el
-        LLM reutilice los slugs ya existentes en lugar de inventar variantes.
+        LLM reutilice los slugs y nombres ya existentes en lugar de inventar
+        variantes.
         """
         rules = _REFINING_SYSTEM_PROMPT if refining else _STRUCTURING_SYSTEM_PROMPT
+        names = self._live_taxonomy_names()
         return (
             rules
             + "\n\n"
-            + _build_dynamic_curriculum_prompt(self._live_taxonomy_tree())
+            + _build_dynamic_curriculum_prompt(self._live_taxonomy_tree(), names)
             + "\n\n"
-            + _build_dynamic_prerequisites_prompt(self._live_prerequisites())
+            + _build_dynamic_prerequisites_prompt(self._live_prerequisites(), names)
         )
 
     def structure(
@@ -553,7 +658,56 @@ class Structurer:
                 question=None,
                 error=f"la pregunta {index + 1} no superó el esquema: {exc}",
             )
-        return StructuredQuestion(question=question)
+        return StructuredQuestion(
+            question=question,
+            taxonomy_names=self._collect_taxonomy_names(draft),
+        )
+
+    @staticmethod
+    def _localized(entry: LocalizedName) -> dict[str, str] | None:
+        """Normaliza un nombre del LLM a ``{es, en}``, o ``None`` si queda vacío."""
+        es = entry.es.strip()
+        en = entry.en.strip()
+        if not es or not en:
+            return None
+        return {"es": es, "en": en}
+
+    @classmethod
+    def _collect_taxonomy_names(cls, draft: QuestionDraft) -> list[TaxonomyNames]:
+        """Proyecta los nombres del LLM en entradas de taxonomía válidas.
+
+        Solo se conservan los nombres que corresponden a la clasificación
+        realmente emitida (curso, tema, subtema y prerrequisitos presentes); un
+        prerrequisito nombrado que no aparezca en la lista se descarta.
+        """
+        entries: list[TaxonomyNames] = []
+
+        def add(
+            kind: TaxonomyKind, slug: str, parent_slug: str, source: LocalizedName | None
+        ) -> None:
+            if source is None:
+                return
+            names = cls._localized(source)
+            if names is None:
+                return
+            entries.append(TaxonomyNames(kind=kind, slug=slug, parent_slug=parent_slug, **names))
+
+        add("course", draft.course, "", draft.course_name)
+        add("topic", draft.topic, draft.course, draft.topic_name)
+        if draft.subtopic:
+            add("subtopic", draft.subtopic, draft.course, draft.subtopic_name)
+        prerequisites = set(draft.prerequisites)
+        seen: set[str] = set()
+        for item in draft.prerequisite_names:
+            slug = slugify(item.slug)
+            if not slug or slug not in prerequisites or slug in seen:
+                continue
+            names = cls._localized(item)
+            if names is None:
+                continue
+            seen.add(slug)
+            entries.append(TaxonomyNames(kind="prerequisite", slug=slug, **names))
+        return entries
 
     @staticmethod
     def _referenced_figure_ids(draft: QuestionDraft) -> set[str]:

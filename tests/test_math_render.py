@@ -1,9 +1,9 @@
-"""Pruebas del renderizado del enunciado con fórmulas TeX (``math_render``).
+"""Tests for statement rendering with TeX formulas (``math_render``).
 
-El recuadro de formato debe mostrar Markdown *y* fórmulas. ``markdown2`` destroza
-el TeX (``$x_1$`` → ``$x<em>1</em>$``, ``\\{`` → ``{``, ``\\\\`` → ``\\``,
-``&`` → ``&amp;``), así que ``render_statement_html`` extrae las fórmulas antes de
-renderizar y las reinserta intactas para que KaTeX las procese en el navegador.
+The formatting preview must show Markdown *and* formulas. ``markdown2`` mangles
+TeX (``$x_1$`` → ``$x<em>1</em>$``, ``\\{`` → ``{``, ``\\\\`` → ``\\``,
+``&`` → ``&amp;``), so ``render_statement_html`` extracts the formulas before
+rendering and reinserts them intact so KaTeX can process them in the browser.
 """
 
 from __future__ import annotations
@@ -14,19 +14,19 @@ from taygeta.ui.nice.math_render import KATEX_CDN, MATH_CLASS, render_statement_
 
 
 def _decoded(rendered: str) -> str:
-    """Des-escapa las entidades como haría el navegador al parsear el HTML."""
+    """Unescape entities as the browser would when parsing the HTML."""
     return html_module.unescape(rendered)
 
 
 def test_subscripts_are_not_mangled() -> None:
-    """``$x_1 + x_2$`` no debe convertirse en énfasis (fallo original)."""
+    """``$x_1 + x_2$`` must not become emphasis (original bug)."""
     rendered = render_statement_html("El valor de $x_1 + x_2$ es la suma.")
     assert "<em>" not in rendered
     assert "$x_1 + x_2$" in rendered
 
 
 def test_math_specials_survive() -> None:
-    """Los caracteres especiales de TeX sobreviven al renderizado."""
+    """TeX special characters survive rendering."""
     statement = r"Sea $\{x \in \mathbb{R} : x > 0\}$ y $a \cdot b = c$."
     decoded = _decoded(render_statement_html(statement))
     assert r"$\{x \in \mathbb{R} : x > 0\}$" in decoded
@@ -34,14 +34,14 @@ def test_math_specials_survive() -> None:
 
 
 def test_matrices_and_ampersands_survive() -> None:
-    """Las matrices (``&`` y ``\\\\``) no se escapan ni se colapsan."""
+    """Matrices (``&`` and ``\\\\``) are neither escaped nor collapsed."""
     statement = r"La matriz $\begin{pmatrix} 1 & 2 \\ 3 & 4 \end{pmatrix}$."
     decoded = _decoded(render_statement_html(statement))
     assert r"$\begin{pmatrix} 1 & 2 \\ 3 & 4 \end{pmatrix}$" in decoded
 
 
 def test_display_math_is_preserved() -> None:
-    """El bloque ``$$...$$`` se mantiene para que KaTeX lo renderice en display."""
+    """The ``$$...$$`` block is preserved so KaTeX renders it in display mode."""
     statement = r"$$ \int_0^1 x^2\,dx = \frac{1}{3} $$"
     decoded = _decoded(render_statement_html(statement))
     assert "$$" in decoded
@@ -49,24 +49,24 @@ def test_display_math_is_preserved() -> None:
 
 
 def test_markdown_formatting_still_works() -> None:
-    """El Markdown del texto (negrita) sigue renderizándose."""
+    """Text Markdown (bold) still renders."""
     rendered = render_statement_html("Texto **negrita** y $x_1$.")
     assert "<strong>negrita</strong>" in rendered
 
 
 def test_no_sentinel_leaks() -> None:
-    """Los centinelas internos nunca deben aparecer en la salida."""
+    """Internal sentinels must never appear in the output."""
     rendered = render_statement_html("$x_1$ y $y_2$ y texto sin fórmulas")
     assert "\ue000" not in rendered
     assert "\ue001" not in rendered
 
 
 def test_empty_statement() -> None:
-    """Un enunciado vacío produce HTML vacío."""
+    """An empty statement produces empty HTML."""
     assert render_statement_html("") == ""
 
 
 def test_katex_assets_and_marker() -> None:
-    """El CDN de KaTeX y la clase marcadora son los esperados."""
+    """The KaTeX CDN and the marker class are the expected ones."""
     assert MATH_CLASS == "taygeta-math"
     assert "katex" in KATEX_CDN

@@ -1,8 +1,8 @@
-"""Pruebas del padding de los recortes en ``image_extractor``.
+"""Tests for crop padding in ``image_extractor``.
 
-Los recortes manuales de la UI deben ser exactos (sin padding), mientras que
-los recortes automáticos del pipeline conservan un margen preventivo del 1 %
-para compensar las BBox imprecisas del detector/LLM.
+Manual crops from the UI must be exact (no padding), whereas automatic
+pipeline crops keep a 1 % preventive margin to compensate for the imprecise
+BBoxes from the detector/LLM.
 """
 
 from __future__ import annotations
@@ -21,32 +21,32 @@ from taygeta.ingest.image_extractor import (
     extract_and_save_figures,
 )
 
-#: BBox de prueba ``[ymin, xmin, ymax, xmax]`` en una página de 1000x1000 px.
+#: Test BBox ``[ymin, xmin, ymax, xmax]`` on a 1000x1000 px page.
 _BBOX = [100, 200, 400, 700]
 
 
 def _source_png(tmp_path: Path, size: tuple[int, int] = (1000, 1000)) -> Path:
-    """Crea una página PNG blanca para recortar sin depender de un PDF real."""
+    """Create a blank white PNG page to crop without depending on a real PDF."""
     source = tmp_path / "pagina.png"
     Image.new("RGB", size, "white").save(source)
     return source
 
 
 def test_default_paddings() -> None:
-    """El padding automático es del 1 % y el manual no añade margen."""
+    """The automatic padding is 1 % and the manual one adds no margin."""
     assert DEFAULT_PADDING == pytest.approx(0.01)
     assert MANUAL_CROP_PADDING == 0.0
 
 
 def test_manual_crop_matches_bbox_exactly(tmp_path: Path) -> None:
-    """El recorte manual (padding 0) mide exactamente la extensión de la BBox."""
+    """The manual crop (padding 0) measures exactly the BBox extent."""
     png = crop_figure_bytes(_source_png(tmp_path), 0, _BBOX, padding=MANUAL_CROP_PADDING)
     with Image.open(io.BytesIO(png)) as crop:
         assert crop.size == (500, 300)
 
 
 def test_manual_crop_is_tighter_than_padded_crop(tmp_path: Path) -> None:
-    """Sin padding el recorte es más pequeño que el automático con margen."""
+    """Without padding the crop is smaller than the automatic padded one."""
     source = _source_png(tmp_path)
     tight = crop_figure_bytes(source, 0, _BBOX, padding=MANUAL_CROP_PADDING)
     padded = crop_figure_bytes(source, 0, _BBOX, padding=DEFAULT_PADDING)
@@ -59,13 +59,13 @@ def test_manual_crop_is_tighter_than_padded_crop(tmp_path: Path) -> None:
 
 
 def test_denormalize_bbox_applies_one_percent_padding() -> None:
-    """``denormalize_bbox`` añade el 1 % del tamaño de página en cada lado."""
+    """``denormalize_bbox`` adds 1 % of the page size on each side."""
     coords = denormalize_bbox(_BBOX, 1000.0, 1000.0, padding=DEFAULT_PADDING)
     assert coords == pytest.approx((190.0, 90.0, 710.0, 410.0))
 
 
 def test_extract_and_save_figures_uses_one_percent_padding(tmp_path: Path) -> None:
-    """La extracción automática conserva el margen preventivo del 1 %."""
+    """Automatic extraction keeps the 1 % preventive margin."""
     crops = extract_and_save_figures(_source_png(tmp_path), 0, [_BBOX], tmp_path / "out")
     assert len(crops) == 1
     assert crops[0].metadata["padding"] == pytest.approx(DEFAULT_PADDING)

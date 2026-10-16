@@ -1,9 +1,9 @@
-"""Pruebas de la edición manual de figuras en la revisión HITL.
+"""Tests for manual figure editing in the HITL review.
 
-Cubre los helpers puros de ``taygeta.ui.figure_editing`` (conversión de
-píxeles/BBox, limpieza de placeholders y reconciliación), el filtro de
-página completa de ``detect_figures`` y las nuevas restricciones de los
-prompts (no declarar ``fig:N`` sin un diagrama explícito).
+Covers the pure helpers of ``taygeta.ui.figure_editing`` (pixel/BBox
+conversion, placeholder cleanup and reconciliation), the full-page filter
+of ``detect_figures`` and the new prompt restrictions (do not declare
+``fig:N`` without an explicit diagram).
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ from taygeta.ui.figure_editing import (
 
 
 class _FakePage:
-    """Página PyMuPDF mínima para probar ``detect_figures`` sin PDF real."""
+    """Minimal PyMuPDF page to test ``detect_figures`` without a real PDF."""
 
     def __init__(
         self,
@@ -55,7 +55,7 @@ class _FakePage:
 
 
 # ---------------------------------------------------------------------------
-# Conversión píxeles <-> BBox normalizada
+# Pixel <-> normalized BBox conversion
 # ---------------------------------------------------------------------------
 
 
@@ -85,7 +85,7 @@ def test_pixel_box_invalid_rejected(box: dict[str, int], width: int, height: int
 
 
 # ---------------------------------------------------------------------------
-# Limpieza de placeholders y reconciliación
+# Placeholder cleanup and reconciliation
 # ---------------------------------------------------------------------------
 
 
@@ -123,7 +123,7 @@ def test_reconcile_detects_orphan_placeholders() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Añadir figuras manualmente (falsos negativos): id secuencial y placeholder
+# Add figures manually (false negatives): sequential id and placeholder
 # ---------------------------------------------------------------------------
 
 
@@ -156,11 +156,11 @@ def test_append_figure_placeholder() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Alta y baja de figuras (helpers puros build_new_figure / remove_figure)
+# Adding and removing figures (pure helpers build_new_figure / remove_figure)
 # ---------------------------------------------------------------------------
 
 
-def test_build_new_figure_asigna_siguiente_id_y_placeholder() -> None:
+def test_build_new_figure_assigns_next_id_and_placeholder() -> None:
     statement = "Analiza {{fig:1}} y responde."
     figures = [{"id": "fig:1", "page": 0, "bbox": [0, 0, 1, 1], "asset_path": "a.png"}]
     nuevas, nuevo_enunciado, figure_id = build_new_figure(
@@ -180,11 +180,11 @@ def test_build_new_figure_asigna_siguiente_id_y_placeholder() -> None:
         "caption": None,
         "asset_path": "/buckets/taygeta-assets/figures/nueva.png",
     }
-    # El helper es puro: la lista original no se muta.
+    # The helper is pure: the original list is not mutated.
     assert len(figures) == 1
 
 
-def test_build_new_figure_con_lista_vacia() -> None:
+def test_build_new_figure_with_empty_list() -> None:
     nuevas, nuevo_enunciado, figure_id = build_new_figure(
         [],
         "",
@@ -197,7 +197,7 @@ def test_build_new_figure_con_lista_vacia() -> None:
     assert len(nuevas) == 1
 
 
-def test_remove_figure_quita_figura_y_placeholder() -> None:
+def test_remove_figure_removes_figure_and_placeholder() -> None:
     figures = [
         {"id": "fig:1", "page": 0, "bbox": [0, 0, 1, 1], "asset_path": "a.png"},
         {"id": "fig:2", "page": 1, "bbox": [0, 0, 1, 1], "asset_path": "b.png"},
@@ -208,11 +208,11 @@ def test_remove_figure_quita_figura_y_placeholder() -> None:
     assert "{{fig:1}}" not in limpio
     assert "{{fig:2}}" in limpio
     assert removed == [{"id": "fig:1", "page": 0, "bbox": [0, 0, 1, 1], "asset_path": "a.png"}]
-    # La lista original no se muta.
+    # The original list is not mutated.
     assert len(figures) == 2
 
 
-def test_remove_figure_inexistente_no_cambia_nada() -> None:
+def test_remove_figure_nonexistent_changes_nothing() -> None:
     figures = [{"id": "fig:1", "page": 0, "bbox": [0, 0, 1, 1], "asset_path": "a.png"}]
     kept, limpio, removed = remove_figure(figures, "Con {{fig:1}}.", "fig:9")
     assert kept == figures
@@ -221,7 +221,7 @@ def test_remove_figure_inexistente_no_cambia_nada() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Detección: descarte de página completa
+# Detection: full-page discard
 # ---------------------------------------------------------------------------
 
 
@@ -231,12 +231,12 @@ def test_detect_figures_drops_full_page_scan() -> None:
 
 
 def test_detect_figures_drops_near_full_page_and_keeps_small() -> None:
-    full = fitz.Rect(0, 0, 500, 700)  # ≈ 72.2 % del área -> se descarta
-    small = fitz.Rect(520, 50, 560, 150)  # ≈ 0.8 % -> se conserva
+    full = fitz.Rect(0, 0, 500, 700)  # ≈ 72.2 % of the area -> discarded
+    small = fitz.Rect(520, 50, 560, 150)  # ≈ 0.8 % -> kept
     page = _FakePage(images=[(1, [full]), (2, [small])])
     figures = detect_figures(page)
     assert [figure.id for figure in figures] == ["fig:1"]
-    assert figures[0].bbox[0] == round(50 / 792 * 1000)  # ymin del rect pequeño
+    assert figures[0].bbox[0] == round(50 / 792 * 1000)  # ymin of the small rect
 
 
 def test_detect_figures_keeps_regular_figure() -> None:
@@ -247,12 +247,12 @@ def test_detect_figures_keeps_regular_figure() -> None:
 
 
 def test_detect_figures_ignores_rule_drawings() -> None:
-    page = _FakePage(drawings=[fitz.Rect(0, 10, 612, 11)])  # regla horizontal
+    page = _FakePage(drawings=[fitz.Rect(0, 10, 612, 11)])  # horizontal rule
     assert detect_figures(page) == []
 
 
 # ---------------------------------------------------------------------------
-# Prompts: solo figuras explícitas
+# Prompts: explicit figures only
 # ---------------------------------------------------------------------------
 
 

@@ -1,9 +1,9 @@
-"""Pruebas de la sanitización defensiva de delimitadores matemáticos.
+"""Tests for the defensive sanitization of math delimiters.
 
-Cubre el fix de renderizado KaTeX/Typst: los modelos OCR/LLM pueden emitir
-``\\[...\\]`` y ``\\(...\\)`` en lugar de ``$$...$$`` y ``$...$``. El esquema
-canónico debe normalizarlos automáticamente al validar (ingesta y persistencia),
-y los system prompts deben prohibir explícitamente los delimitadores no estándar.
+Covers the KaTeX/Typst rendering fix: OCR/LLM models may emit ``\\[...\\]``
+and ``\\(...\\)`` instead of ``$$...$$`` and ``$...$``. The canonical schema
+must normalize them automatically on validation (ingestion and persistence),
+and the system prompts must explicitly forbid non-standard delimiters.
 """
 
 from __future__ import annotations

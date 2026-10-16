@@ -1,13 +1,13 @@
-"""Pruebas del port NiceGUI de la revisión HITL (arnés ``user_simulation``).
+"""Tests for the NiceGUI port of the HITL review (``user_simulation`` harness).
 
-Estas pruebas construyen la página real sin navegador (``httpx`` + ``socketio``
-en proceso). Notas importantes:
+These tests build the real page without a browser (in-process ``httpx`` +
+``socketio``). Important notes:
 
-* ``user_simulation`` **solo funciona bajo pytest**: el reset de globals llama a
-  ``App.reset()`` -> ``Storage.clear()``, que accede a ``context.client`` salvo
-  cuando ``helpers.is_pytest()`` es verdadero. Ejecutarlo como script suelto
-  activa el "script mode" y rompe la app basada en ``@ui.page``.
-* Playwright no es necesario (``screen``/Selenium sí lo requerirían).
+* ``user_simulation`` **only works under pytest**: the globals reset calls
+  ``App.reset()`` -> ``Storage.clear()``, which accesses ``context.client``
+  unless ``helpers.is_pytest()`` is true. Running it as a standalone script
+  enables "script mode" and breaks the ``@ui.page``-based app.
+* Playwright is not needed (``screen``/Selenium would be).
 """
 
 from __future__ import annotations
@@ -34,13 +34,13 @@ pytestmark = pytest.mark.anyio
 
 @pytest.fixture
 def anyio_backend() -> str:
-    """Fuerza el backend asyncio del plugin anyio."""
+    """Force the anyio plugin's asyncio backend."""
     return "asyncio"
 
 
 @pytest.fixture
 def ui_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """Aísla rutas/persistencia de la UI en un directorio temporal."""
+    """Isolate UI paths/persistence in a temporary directory."""
     for name in ("uploads", "downloads"):
         (tmp_path / name).mkdir(parents=True, exist_ok=True)
     monkeypatch.setenv("DB_PATH", str(tmp_path / "taygeta.db"))
@@ -53,7 +53,7 @@ def ui_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
 
 
 class _StubStorage:
-    """Almacenamiento nulo: evita cualquier acceso de red al cargar figuras."""
+    """Null storage: avoids any network access when loading figures."""
 
     bucket = "taygeta-assets"
 
@@ -62,7 +62,7 @@ class _StubStorage:
 
 
 class _FakeStorage:
-    """Almacenamiento en memoria para probar el alta/recorte de figuras sin red."""
+    """In-memory storage to test figure adding/cropping without the network."""
 
     bucket = "taygeta-assets"
 
@@ -135,7 +135,7 @@ def _make_questions() -> list[StagedQuestion]:
 
 
 async def test_index_page_builds(ui_env: None, tmp_path: Path) -> None:
-    """La página principal del port NiceGUI se construye sin errores."""
+    """The NiceGUI port's main page builds without errors."""
     from nicegui.testing import user_simulation
 
     launcher = tmp_path / "niceui_launcher.py"
@@ -148,7 +148,7 @@ async def test_index_page_builds(ui_env: None, tmp_path: Path) -> None:
         await user.should_see("2. Procesar")
         await user.should_see("3. Revisión y confirmación")
 
-        # Modo oscuro: el botón flotante alterna el estado del cliente.
+        # Dark mode: the floating button toggles the client state.
         user.find("toggle-dark-mode").click()
         dark = next(
             element
@@ -159,7 +159,7 @@ async def test_index_page_builds(ui_env: None, tmp_path: Path) -> None:
 
 
 async def test_question_panels_build_and_switch_view(ui_env: None) -> None:
-    """Los paneles se construyen con datos falsos y responden a eventos."""
+    """The panels build with fake data and respond to events."""
     settings = get_settings()
     database = Database(settings=settings)
     staged = _make_questions()
@@ -190,11 +190,11 @@ async def test_question_panels_build_and_switch_view(ui_env: None) -> None:
         await user.should_see("Alternativa 1 — id")
         await user.should_see("Opciones Avanzadas")
 
-        # La vista por defecto de la columna derecha es «Imagen original».
+        # The right column's default view is "Original image".
         await user.should_see("Imagen original")
         await user.should_see("No hay documento de origen para mostrar.")
 
-        # Al cambiar a «Figuras nuevas» aparece la gestión de figuras.
+        # Switching to "New figures" shows figure management.
         user.find("Figuras nuevas").click()
         await user.should_see("➕ Añadir nueva figura")
 
@@ -202,11 +202,11 @@ async def test_question_panels_build_and_switch_view(ui_env: None) -> None:
 async def test_add_figure_area_renders_cropper_with_real_source(
     ui_env: None, tmp_path: Path
 ) -> None:
-    """Regresión: con un origen real el alta de figuras dibuja el cropper.
+    """Regression: with a real source, adding figures draws the cropper.
 
-    Antes, ``_render_add_area`` llamaba a ``Select.on_change`` (inexistente en
-    NiceGUI 3), lo que abortaba la construcción del panel y solo dejaba ver la
-    primera pregunta y un selector de página vacío.
+    Previously, ``_render_add_area`` called ``Select.on_change`` (nonexistent in
+    NiceGUI 3), which aborted the panel build and only showed the first question
+    and an empty page selector.
     """
     from nicegui.testing import user_simulation
     from PIL import Image
@@ -236,15 +236,15 @@ async def test_add_figure_area_renders_cropper_with_real_source(
         await user.open("/")
         await user.should_see("Pregunta 1 — VALID")
 
-        # La numeración de páginas mostrada empieza en 1.
+        # The displayed page numbering starts at 1.
         await user.should_see("Página original 1")
         await user.should_not_see("Página original 0")
 
-        # Cambiar a la pestaña de figuras: aquí se construía el alta de figuras.
+        # Switch to the figures tab: figure adding used to be built here.
         user.find("Figuras nuevas").click()
         await user.should_see("➕ Añadir nueva figura")
 
-        # Desplegar el alta dibuja el cropper (render diferido).
+        # Expanding the add area draws the cropper (deferred render).
         add_expansion = next(
             element
             for element in user.find("➕ Añadir nueva figura").elements
@@ -257,7 +257,7 @@ async def test_add_figure_area_renders_cropper_with_real_source(
 
 
 def _cropper_root(source: Path, staged: StagedQuestion, storage: Any) -> Callable[[], None]:
-    """Devuelve un ``root`` con un único ``QuestionPanel`` para la simulación."""
+    """Return a ``root`` with a single ``QuestionPanel`` for the simulation."""
     settings = get_settings()
     database = Database(settings=settings)
 
@@ -280,16 +280,16 @@ def _cropper_root(source: Path, staged: StagedQuestion, storage: Any) -> Callabl
 
 
 async def test_add_figure_keeps_cropper_selection(ui_env: None, tmp_path: Path) -> None:
-    """Regresión: el recuadro se conserva al soltar y la figura se añade.
+    """Regression: the box is kept on release and the figure is added.
 
-    Antes, ``DragBoxCropper`` borraba el rectángulo en ``mouseup`` y el
-    ``on_confirm`` guardaba ``left/top/width/height`` en lugar de ``bbox``, de
-    modo que el alta siempre avisaba de que no había selección.
+    Previously, ``DragBoxCropper`` cleared the rectangle on ``mouseup`` and
+    ``on_confirm`` stored ``left/top/width/height`` instead of ``bbox``, so
+    adding always warned that there was no selection.
     """
     from nicegui.testing import user_simulation
     from PIL import Image
 
-    staged = _make_questions()[1]  # sin figuras: un único cropper en el panel
+    staged = _make_questions()[1]  # no figures: a single cropper in the panel
     source = tmp_path / "pagina.png"
     Image.new("RGB", (600, 800), "white").save(source)
     root = _cropper_root(source, staged, _FakeStorage())
@@ -319,7 +319,7 @@ async def test_add_figure_keeps_cropper_selection(ui_env: None, tmp_path: Path) 
         mouse("mousedown", 50, 60)
         mouse("mousemove", 250, 260)
         mouse("mouseup", 250, 260)
-        # El recuadro sigue dibujado tras soltar el ratón.
+        # The box is still drawn after releasing the mouse.
         assert "<rect" in cropper.content
 
         user.find("Añadir figura").click()
@@ -327,15 +327,15 @@ async def test_add_figure_keeps_cropper_selection(ui_env: None, tmp_path: Path) 
 
 
 async def test_cropper_zoom_controls(ui_env: None, tmp_path: Path) -> None:
-    """Los controles de zoom acercan, alejan y reinician el cropper.
+    """The zoom controls zoom in, zoom out and reset the cropper.
 
-    El zoom redimensiona la imagen por *layout* (no con ``transform``), así que
-    el mapeo de coordenadas de ``ui.interactive_image`` sigue siendo exacto.
+    Zoom resizes the image through *layout* (not with ``transform``), so
+    ``ui.interactive_image``'s coordinate mapping stays exact.
     """
     from nicegui.testing import user_simulation
     from PIL import Image
 
-    staged = _make_questions()[1]  # sin figuras: un único cropper en el panel
+    staged = _make_questions()[1]  # no figures: a single cropper in the panel
     source = tmp_path / "pagina.png"
     Image.new("RGB", (600, 800), "white").save(source)
     root = _cropper_root(source, staged, _FakeStorage())
@@ -354,10 +354,10 @@ async def test_cropper_zoom_controls(ui_env: None, tmp_path: Path) -> None:
         with user:
             add_expansion.value = True
 
-        # El cropper arranca ajustado a la vista.
+        # The cropper starts fitted to the view.
         await user.should_see("100 %")
 
-        # Acercar sube en pasos de 0,5; el reinicio vuelve al 100 %.
+        # Zooming in steps up by 0.5; reset returns to 100 %.
         user.find("cropper-zoom-in").click()
         await user.should_see("150 %")
         user.find("cropper-zoom-in").click()
@@ -365,16 +365,16 @@ async def test_cropper_zoom_controls(ui_env: None, tmp_path: Path) -> None:
         user.find("cropper-zoom-reset").click()
         await user.should_see("100 %")
 
-        # Alejar por debajo del mínimo no baja del 100 % (el clamp lo impide).
+        # Zooming out below the minimum does not go under 100 % (the clamp prevents it).
         user.find("cropper-zoom-out").click()
         await user.should_see("100 %")
 
 
 async def test_statement_preview_renders_math(ui_env: None) -> None:
-    """El recuadro de formato es ``ui.html`` + KaTeX y conserva las fórmulas.
+    """The formatting preview is ``ui.html`` + KaTeX and preserves formulas.
 
-    Antes usaba ``ui.markdown``: markdown2 destrozaba el TeX (``$x^2$`` →
-    ``$x<em>2</em>$``) y no había ningún motor que lo renderizara.
+    It used to use ``ui.markdown``: markdown2 mangled the TeX (``$x^2$`` →
+    ``$x<em>2</em>$``) and no engine rendered it.
     """
     from nicegui.testing import user_simulation
 
@@ -404,8 +404,8 @@ async def test_statement_preview_renders_math(ui_env: None) -> None:
         ]
         assert len(previews) == 1
         content = previews[0].content
-        # La fórmula llega intacta (sin el énfasis que introducía markdown2).
+        # The formula arrives intact (without the emphasis markdown2 introduced).
         assert "$x^2 - 1 = 0$" in content
         assert "<em>" not in content
-        # El placeholder de figura se mantiene como texto.
+        # The figure placeholder stays as text.
         assert "{{fig:1}}" in content

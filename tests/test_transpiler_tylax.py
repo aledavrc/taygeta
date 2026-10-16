@@ -1,10 +1,10 @@
-"""Pruebas del conversor TeX→Typst delegado a tylax.
+"""Tests for the TeX→Typst converter delegated to tylax.
 
-Cubre el reemplazo del parser propio por la fachada :class:`MathConverter`
-sobre ``tylax.latex_to_typst``: corpus de oro de fórmulas representativas,
-elevación a :class:`TranspileError` del marcador de error sintáctico de tylax,
-passthrough de comandos desconocidos y compilación real con el binario
-``typst`` (se omite si no está en el PATH).
+Covers the replacement of the in-house parser by the :class:`MathConverter`
+facade over ``tylax.latex_to_typst``: a golden corpus of representative
+formulas, elevation to :class:`TranspileError` of tylax's syntax error marker,
+passthrough of unknown commands and real compilation with the ``typst``
+binary (skipped if not on PATH).
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ from taygeta.core.transpiler import (
     validate_typst,
 )
 
-#: Pares ``(TeX, salida Typst esperada)`` con las opciones fijas del módulo
+#: ``(TeX, expected Typst output)`` pairs with the module's fixed options
 #: (``frac_to_slash=False``, ``non_strict=True``).
 _CORPUS: tuple[tuple[str, str], ...] = (
     (r"\frac{1}{2}", "frac(1, 2)"),
@@ -65,46 +65,46 @@ _CORPUS: tuple[tuple[str, str], ...] = (
 _CORPUS_IDS = [tex for tex, _ in _CORPUS]
 
 
-@pytest.mark.parametrize(("tex", "esperado"), _CORPUS, ids=_CORPUS_IDS)
-def test_corpus_de_oro_tex_a_typst(tex: str, esperado: str) -> None:
-    assert MathConverter().convert(tex) == esperado
+@pytest.mark.parametrize(("tex", "expected"), _CORPUS, ids=_CORPUS_IDS)
+def test_golden_corpus_tex_to_typst(tex: str, expected: str) -> None:
+    assert MathConverter().convert(tex) == expected
 
 
-@pytest.mark.skipif(shutil.which("typst") is None, reason="binario typst no disponible")
-@pytest.mark.parametrize(("tex", "esperado"), _CORPUS, ids=_CORPUS_IDS)
-def test_corpus_compila_con_typst_real(tex: str, esperado: str, tmp_path) -> None:
+@pytest.mark.skipif(shutil.which("typst") is None, reason="typst binary not available")
+@pytest.mark.parametrize(("tex", "expected"), _CORPUS, ids=_CORPUS_IDS)
+def test_corpus_compiles_with_real_typst(tex: str, expected: str, tmp_path) -> None:
     result = compile_typst(
-        f"$ {esperado} $\n", tmp_path, filename="main.typ", output_name="output.pdf"
+        f"$ {expected} $\n", tmp_path, filename="main.typ", output_name="output.pdf"
     )
     assert result.ok, result.format_errors()
 
 
-def test_latex_no_analizable_eleva_transpile_error() -> None:
+def test_unparseable_latex_raises_transpile_error() -> None:
     with pytest.raises(TranspileError) as exc_info:
         MathConverter().convert(r"}")
     assert exc_info.value.original == r"}"
     assert "tylax" in exc_info.value.message
 
 
-def test_comando_desconocido_no_lanza() -> None:
-    # tylax es no estricto: conserva el comando desconocido como texto crudo en
-    # lugar de eliminarlo en silencio; el `typst compile` final lo detecta.
-    salida = MathConverter().convert(r"\noop{foo}")
-    assert "noop" in salida
+def test_unknown_command_does_not_raise() -> None:
+    # tylax is non-strict: it keeps the unknown command as raw text instead of
+    # silently removing it; the final `typst compile` detects it.
+    output = MathConverter().convert(r"\noop{foo}")
+    assert "noop" in output
 
 
-def test_markdown_to_typst_integra_math_y_figuras() -> None:
-    salida = markdown_to_typst(
+def test_markdown_to_typst_integrates_math_and_figures() -> None:
+    output = markdown_to_typst(
         "Calcula $$\\int_0^1 x\\,dx$$ para $x > 0$.\n\n{{fig:1}}",
         figure_paths={"fig:1": "fig_1.png"},
     )
-    assert "integral_(0)^(1)" in salida
-    assert "$x > 0$" in salida
-    assert '#figure(image("assets/fig_1.png"' in salida
+    assert "integral_(0)^(1)" in output
+    assert "$x > 0$" in output
+    assert '#figure(image("assets/fig_1.png"' in output
 
 
-@pytest.mark.skipif(shutil.which("typst") is None, reason="binario typst no disponible")
-def test_validate_typst_acepta_documento_generado() -> None:
-    fuente = markdown_to_typst("Resuelve $$\\frac{1}{2}$$ para $x>0$.")
-    result = validate_typst(fuente)
+@pytest.mark.skipif(shutil.which("typst") is None, reason="typst binary not available")
+def test_validate_typst_accepts_generated_document() -> None:
+    source = markdown_to_typst("Resuelve $$\\frac{1}{2}$$ para $x>0$.")
+    result = validate_typst(source)
     assert result.ok, result.format_errors()

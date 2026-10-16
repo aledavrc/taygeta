@@ -1,4 +1,4 @@
-"""Núcleo de Taygeta: esquemas canónicos, transpilador y configuración."""
+"""Taygeta core: canonical schemas, transpiler and configuration."""
 
 from __future__ import annotations
 

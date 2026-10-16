@@ -1,30 +1,30 @@
-"""Transpilador Markdown/TeX a Typst y LaTeX (sección 10).
+"""Markdown/TeX to Typst and LaTeX transpiler (section 10).
 
-Diseño (sin sustituciones globales por regex):
+Design (no global regex substitutions):
 
-* ``pandoc_to_ast`` invoca el CLI de Pandoc vía ``subprocess`` (argumentos en
-  lista, nunca ``shell=True``) y devuelve el AST JSON del documento.
-* ``_render_blocks`` / ``_render_inlines`` recorren recursivamente los nodos de
-  bloque e inline conservando la estructura semántica.
-* Los nodos ``Math`` (``InlineMath``/``DisplayMath``) se procesan con
-  :class:`MathConverter`, una fachada sobre **tylax** (conversor LaTeX↔Typst
-  escrito en Rust): cada fórmula TeX se delega a ``tylax.latex_to_typst`` con
-  ``frac_to_slash=False`` y ``non_strict=True``.
-* Los placeholders ``{{fig:N}}`` se detectan con un escáner manual (no regex) y
-  se convierten en bloques ``#figure(image("assets/...", width: 80%))``.
-* La exportación a LaTeX usa Pandoc (``--to latex``) y ``\\includegraphics``
-  para las figuras.
-* ``compile_typst`` / ``validate_typst`` ejecutan el binario ``typst`` en modo
-  real de compilación y devuelven los errores con contexto.
+* ``pandoc_to_ast`` invokes the Pandoc CLI via ``subprocess`` (list arguments,
+  never ``shell=True``) and returns the document's JSON AST.
+* ``_render_blocks`` / ``_render_inlines`` recursively walk the block and inline
+  nodes preserving the semantic structure.
+* ``Math`` nodes (``InlineMath``/``DisplayMath``) are processed with
+  :class:`MathConverter`, a facade over **tylax** (a LaTeX↔Typst converter
+  written in Rust): every TeX formula is delegated to ``tylax.latex_to_typst``
+  with ``frac_to_slash=False`` and ``non_strict=True``.
+* ``{{fig:N}}`` placeholders are detected with a manual scanner (no regex) and
+  become ``#figure(image("assets/...", width: 80%))`` blocks.
+* LaTeX export uses Pandoc (``--to latex``) and ``\\includegraphics`` for the
+  figures.
+* ``compile_typst`` / ``validate_typst`` run the real ``typst`` binary in
+  compilation mode and return the errors with context.
 
-Nota sobre el manejo de errores: tylax **no lanza** ante comandos TeX
-desconocidos; con ``non_strict=True`` los conserva como texto crudo (en modo
-estricto los elimina en silencio), de modo que un comando desconocido se
-detecta en la compilación real con Typst (``unknown variable: ...``) y un
-examen roto nunca genera un PDF sin aviso. Un LaTeX que tylax no puede analizar
-produce el marcador ``/* LaTeX Error ... */``, que
-:meth:`MathConverter.convert` eleva a :class:`TranspileError` conservando el
-TeX original para recuperación o exportación LaTeX.
+Note on error handling: tylax does **not** raise on unknown TeX commands; with
+``non_strict=True`` it keeps them as raw text (in strict mode it silently drops
+them), so an unknown command is detected in the real Typst compilation
+(``unknown variable: ...``) and a broken exam never produces a PDF without
+warning. LaTeX that tylax cannot parse produces the marker
+``/* LaTeX Error ... */``, which :meth:`MathConverter.convert` raises as
+:class:`TranspileError`, preserving the original TeX for recovery or LaTeX
+export.
 """
 
 from __future__ import annotations
@@ -56,7 +56,7 @@ __all__ = [
 
 
 class TranspileError(RuntimeError):
-    """Error controlado de conversión, conservando el TeX original cuando aplica."""
+    """Controlled conversion error, preserving the original TeX when applicable."""
 
     def __init__(self, message: str, *, original: str | None = None) -> None:
         super().__init__(message)
@@ -66,7 +66,7 @@ class TranspileError(RuntimeError):
 
 @dataclass(slots=True)
 class CompileResult:
-    """Resultado de una compilación real con Typst."""
+    """Result of a real Typst compilation."""
 
     ok: bool
     pdf_path: Path | None
@@ -75,8 +75,8 @@ class CompileResult:
     returncode: int
 
     def format_errors(self) -> str:
-        """Devuelve el mensaje de error de Typst con contexto, si lo hubo."""
-        return self.stderr.strip() or "sin errores"
+        """Return the Typst error message with context, if there was one."""
+        return self.stderr.strip() or "no errors"
 
 
 # ---------------------------------------------------------------------------
@@ -85,11 +85,10 @@ class CompileResult:
 
 
 def pandoc_to_ast(markdown: str, *, pandoc_bin: str = "pandoc") -> dict[str, Any]:
-    """Obtiene el AST JSON de Pandoc para un documento Markdown.
+    """Get the Pandoc JSON AST for a Markdown document.
 
     Raises:
-        TranspileError: si Pandoc no está disponible, falla o devuelve JSON
-            inválido.
+        TranspileError: if Pandoc is not available, fails or returns invalid JSON.
     """
     executable = shutil.which(pandoc_bin) or pandoc_bin
     process = subprocess.run(
@@ -99,68 +98,67 @@ def pandoc_to_ast(markdown: str, *, pandoc_bin: str = "pandoc") -> dict[str, Any
         capture_output=True,
     )
     if process.returncode != 0:
-        raise TranspileError(f"pandoc falló: {process.stderr.strip()}")
+        raise TranspileError(f"pandoc failed: {process.stderr.strip()}")
     try:
         return json.loads(process.stdout)
     except json.JSONDecodeError as exc:
-        raise TranspileError(f"pandoc devolvió JSON inválido: {exc}") from exc
+        raise TranspileError(f"pandoc returned invalid JSON: {exc}") from exc
 
 
 # ---------------------------------------------------------------------------
-# Conversor TeX → Typst (delegado a tylax)
+# TeX -> Typst converter (delegated to tylax)
 # ---------------------------------------------------------------------------
 
 
-#: Opciones fijas de conversión para las fórmulas del banco.
+#: Fixed conversion options for the bank formulas.
 #:
-#: * ``frac_to_slash=False`` mantiene ``frac(a, b)`` (estilo del conversor
-#:   anterior) en lugar del atajo ``a/b``.
-#: * ``non_strict=True`` (valor por defecto de tylax) conserva los comandos
-#:   desconocidos como texto crudo en vez de eliminarlos en silencio: así el
-#:   ``typst compile`` final los detecta y un enunciado roto nunca genera un
-#:   PDF sin aviso (invariante del dominio).
+#: * ``frac_to_slash=False`` keeps ``frac(a, b)`` (style of the previous
+#:   converter) instead of the ``a/b`` shortcut.
+#: * ``non_strict=True`` (tylax's default) keeps unknown commands as raw text
+#:   instead of silently dropping them: this way the final ``typst compile``
+#:   detects them and a broken statement never produces a PDF without warning
+#:   (a domain invariant).
 _L2T_OPTIONS = tylax.L2TOptions(frac_to_slash=False, non_strict=True)
 
-#: Marcador que tylax inserta cuando la entrada LaTeX no se pudo analizar.
+#: Marker that tylax inserts when the LaTeX input could not be parsed.
 _LATEX_ERROR_MARK = "/* LaTeX Error"
 
 
 class MathConverter:
-    """Conversor estructural de una fórmula TeX a Typst (fachada sobre tylax).
+    """Structural converter of a TeX formula to Typst (a facade over tylax).
 
-    tylax (conversor LaTeX↔Typst escrito en Rust) traduce cada fórmula con un
-    catálogo de símbolos y expansión de macros mucho más amplios que el parser
-    propio que reemplaza. La clase conserva la API pública anterior
-    (``convert(tex)``) y el atributo ``_original`` para que los renderizadores
-    de bloques/inlines del módulo no cambien.
+    tylax (a LaTeX↔Typst converter written in Rust) translates each formula with
+    a symbol catalog and macro expansion far broader than the homegrown parser it
+    replaces. The class keeps the previous public API (``convert(tex)``) and the
+    ``_original`` attribute so the module's block/inline renderers do not change.
     """
 
     def __init__(self) -> None:
         self._original = ""
 
     def convert(self, tex: str) -> str:
-        """Convierte una fórmula TeX (sin delimitadores ``$``) a Typst.
+        """Convert a TeX formula (without ``$`` delimiters) to Typst.
 
         Raises:
-            TranspileError: si tylax no pudo analizar el LaTeX de entrada (la
-                salida contiene el marcador ``/* LaTeX Error ... */``). Los
-                comandos desconocidos **no** lanzan: se conservan como texto
-                crudo y la compilación real con Typst los detectará.
+            TranspileError: if tylax could not parse the input LaTeX (the output
+                contains the ``/* LaTeX Error ... */`` marker). Unknown commands
+                do **not** raise: they are kept as raw text and the real Typst
+                compilation will detect them.
         """
         self._original = tex
         result = tylax.latex_to_typst(tex, options=_L2T_OPTIONS)
         if _LATEX_ERROR_MARK in result:
-            raise TranspileError(f"LaTeX no analizable por tylax: {result.strip()}", original=tex)
+            raise TranspileError(f"LaTeX not parseable by tylax: {result.strip()}", original=tex)
         return result
 
 
 # ---------------------------------------------------------------------------
-# Placeholders de figura (escáner manual, sin regex)
+# Figure placeholders (manual scanner, no regex)
 # ---------------------------------------------------------------------------
 
 
 def _scan_figure_placeholders(text: str) -> list[tuple[str, str]]:
-    """Devuelve una lista de pares ``(tipo, valor)``: ``("text", ...)`` o ``("figure", n)``."""
+    """Return a list of ``(kind, value)`` pairs: ``("text", ...)`` or ``("figure", n)``."""
     spans: list[tuple[str, str]] = []
     marker = "{{fig:"
     index = 0
@@ -196,7 +194,7 @@ def _figure_block(number: str, figure_paths: Mapping[str, str]) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Renderizado del AST de Pandoc
+# Rendering of the Pandoc AST
 # ---------------------------------------------------------------------------
 
 
@@ -245,7 +243,7 @@ def _render_inlines(
         elif node_type == "Note":
             continue
         else:
-            raise TranspileError(f"elemento inline no soportado: {node_type}")
+            raise TranspileError(f"unsupported inline element: {node_type}")
     return "".join(parts)
 
 
@@ -300,7 +298,7 @@ def _render_block(
         return _render_blocks(content[1], converter, figure_paths)
     if node_type == "Null":
         return ""
-    raise TranspileError(f"bloque no soportado: {node_type}")
+    raise TranspileError(f"unsupported block: {node_type}")
 
 
 def _render_blocks(
@@ -311,19 +309,19 @@ def _render_blocks(
 
 
 # ---------------------------------------------------------------------------
-# Sanitización de matemáticas para Typst
+# Math sanitization for Typst
 # ---------------------------------------------------------------------------
 
 
 def _replace_empty_identifier(tex: str) -> str:
-    """Reescribe la palabra ``empty`` como ``\\emptyset`` dentro de una fórmula.
+    """Rewrite the word ``empty`` as ``\\emptyset`` inside a formula.
 
-    Algunos modelos OCR/LLM escriben ``empty`` (nombre del conjunto vacío en otras
-    sintaxis) donde Typst espera ``emptyset``; el transpilador no reconoce ese
-    identificador y Typst aborta con ``unknown variable: empty``. Solo se
-    reemplaza la palabra completa, de modo que ``\\emptyset`` (cuyo identificador
-    es ``emptyset``, no ``empty``) queda intacto. También se normaliza el comando
-    inválido ``\\empty`` a ``\\emptyset``.
+    Some OCR/LLM models write ``empty`` (the name of the empty set in other
+    syntaxes) where Typst expects ``emptyset``; the transpiler does not recognize
+    that identifier and Typst aborts with ``unknown variable: empty``. Only the
+    whole word is replaced, so ``\\emptyset`` (whose identifier is ``emptyset``,
+    not ``empty``) stays intact. The invalid command ``\\empty`` is also
+    normalized to ``\\emptyset``.
     """
     parts: list[str] = []
     index = 0
@@ -352,10 +350,9 @@ def _replace_empty_identifier(tex: str) -> str:
 
 
 def _find_inline_math_close(text: str, start: int) -> int:
-    """Devuelve el índice del ``$`` que cierra una fórmula inline (o ``-1``).
+    """Return the index of the ``$`` that closes an inline formula (or ``-1``).
 
-    Se ignoran los dólares escapados (``\\$``) que pudieran aparecer dentro de la
-    fórmula.
+    Escaped dollars (``\\$``) that may appear inside the formula are ignored.
     """
     index = start
     length = len(text)
@@ -370,11 +367,11 @@ def _find_inline_math_close(text: str, start: int) -> int:
 
 
 def _rewrite_empty_set(markdown: str) -> str:
-    """Reemplaza ``empty`` por ``\\emptyset`` dentro de los bloques matemáticos.
+    """Replace ``empty`` with ``\\emptyset`` inside the math blocks.
 
-    Recorre el Markdown distinguiendo display (``$$...$$``) e inline (``$...$``) y
-    aplica :func:`_replace_empty_identifier` solo al interior de las fórmulas, de
-    modo que la palabra inglesa ``empty`` del texto normal nunca se altera.
+    It walks the Markdown distinguishing display (``$$...$$``) from inline
+    (``$...$``) and applies :func:`_replace_empty_identifier` only inside the
+    formulas, so the English word ``empty`` in normal text is never altered.
     """
     parts: list[str] = []
     index = 0
@@ -411,27 +408,25 @@ def _rewrite_empty_set(markdown: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# API pública
+# Public API
 # ---------------------------------------------------------------------------
 
 
 def sanitize_math_for_typst(markdown: str) -> str:
-    """Sanitiza el Markdown de entrada justo antes de compilar a Typst.
+    """Sanitize the input Markdown right before compiling to Typst.
 
-    Endurecimiento defensivo del compilador: aunque los esquemas ya normalizan
-    los delimitadores al validar (y la base de datos almacena la forma canónica),
-    este paso garantiza que cualquier enunciado que llegue al transpilador quede
-    listo para Typst:
+    Defensive compiler hardening: although the schemas already normalize the
+    delimiters on validation (and the database stores the canonical form), this
+    step guarantees that any statement reaching the transpiler is ready for Typst:
 
-    * ``\\[...\\]`` y ``\\(...\\)`` se reescriben a ``$$...$$`` / ``$...$`` (con
-      :func:`~taygeta.core.schema.sanitize_math_delimiters`), de modo que Pandoc
-      genere nodos ``DisplayMath``/``InlineMath`` y el renderizado produzca los
-      delimitadores de bloque ``$ ... $`` de Typst;
-    * ``\\|`` (barra de norma LaTeX) se reescribe como ``||`` (norma Typst) con
+    * ``\\[...\\]`` and ``\\(...\\)`` are rewritten to ``$$...$$`` / ``$...$``
+      (with :func:`~taygeta.core.schema.sanitize_math_delimiters`), so Pandoc
+      generates ``DisplayMath``/``InlineMath`` nodes and the rendering produces
+      Typst's block delimiters ``$ ... $``;
+    * ``\\|`` (LaTeX norm bar) is rewritten as ``||`` (Typst norm) with
       :func:`~taygeta.core.schema.sanitize_norm_bars`;
-    * la palabra ``empty`` dentro de fórmulas se reescribe como ``\\emptyset``
-      (símbolo del conjunto vacío) para evitar el error de Typst
-      ``unknown variable: empty``.
+    * the word ``empty`` inside formulas is rewritten as ``\\emptyset`` (the
+      empty-set symbol) to avoid the Typst error ``unknown variable: empty``.
     """
     sanitized = sanitize_norm_bars(sanitize_math_delimiters(markdown))
     return _rewrite_empty_set(sanitized)
@@ -443,15 +438,15 @@ def markdown_to_typst(
     figure_paths: Mapping[str, str] | None = None,
     pandoc_bin: str = "pandoc",
 ) -> str:
-    """Convierte Markdown (con TeX ``$...$``/``$$...$$``) a Typst.
+    """Convert Markdown (with TeX ``$...$``/``$$...$$``) to Typst.
 
     Args:
-        markdown: Documento Markdown con matemáticas TeX y placeholders ``{{fig:N}}``.
-        figure_paths: Mapeo opcional ``fig:id`` → nombre de asset relativo a ``assets/``.
-        pandoc_bin: Ruta del ejecutable de Pandoc.
+        markdown: Markdown document with TeX math and ``{{fig:N}}`` placeholders.
+        figure_paths: Optional mapping ``fig:id`` → asset name relative to ``assets/``.
+        pandoc_bin: Path of the Pandoc executable.
 
     Raises:
-        TranspileError: si hay un bloque/inline/constructo no soportado.
+        TranspileError: if there is an unsupported block/inline/construct.
     """
     sanitized = sanitize_math_for_typst(markdown)
     ast = pandoc_to_ast(sanitized, pandoc_bin=pandoc_bin)
@@ -463,10 +458,10 @@ _LATEX_FIG_SENTINEL = "TAYGETAFIG"
 
 
 def _protect_figures(markdown: str) -> tuple[str, dict[str, str]]:
-    """Sustituye ``{{fig:N}}`` por sentinel alfanuméricos antes de Pandoc.
+    """Replace ``{{fig:N}}`` with alphanumeric sentinels before Pandoc.
 
-    Pandoc escaparía las llaves en la salida LaTeX (``\\{\\{fig:1\\}\\}``), así que
-    los placeholders se reemplazan por tokens alfanuméricos que Pandoc respeta.
+    Pandoc would escape the braces in the LaTeX output (``\\{\\{fig:1\\}\\}``), so
+    the placeholders are replaced with alphanumeric tokens that Pandoc respects.
     """
     parts: list[str] = []
     mapping: dict[str, str] = {}
@@ -516,7 +511,7 @@ def markdown_to_latex(
     figure_paths: Mapping[str, str] | None = None,
     pandoc_bin: str = "pandoc",
 ) -> str:
-    """Convierte Markdown a LaTeX usando Pandoc y ``\\includegraphics`` para figuras."""
+    """Convert Markdown to LaTeX using Pandoc and ``\\includegraphics`` for figures."""
     protected, mapping = _protect_figures(markdown)
     executable = shutil.which(pandoc_bin) or pandoc_bin
     process = subprocess.run(
@@ -526,7 +521,7 @@ def markdown_to_latex(
         capture_output=True,
     )
     if process.returncode != 0:
-        raise TranspileError(f"pandoc falló al exportar LaTeX: {process.stderr.strip()}")
+        raise TranspileError(f"pandoc failed to export LaTeX: {process.stderr.strip()}")
     return _replace_latex_sentinels(process.stdout, mapping, figure_paths or {})
 
 
@@ -538,9 +533,10 @@ def compile_typst(
     filename: str = "main.typ",
     output_name: str = "output.pdf",
 ) -> CompileResult:
-    """Compila una fuente Typst a PDF en ``workdir`` usando el binario real.
+    """Compile a Typst source to PDF in ``workdir`` using the real binary.
 
-    No usa ``shell=True``: invoca ``typst compile`` con argumentos en lista.
+    It does not use ``shell=True``: it invokes ``typst compile`` with list
+    arguments.
     """
     directory = Path(workdir)
     directory.mkdir(parents=True, exist_ok=True)
@@ -569,7 +565,7 @@ def validate_typst(
     typst_bin: str = "typst",
     filename: str = "main.typ",
 ) -> CompileResult:
-    """Valida una fuente Typst compilándola en un directorio temporal."""
+    """Validate a Typst source by compiling it in a temporary directory."""
     with tempfile.TemporaryDirectory(prefix="taygeta-typst-") as directory:
         return compile_typst(
             source, directory, typst_bin=typst_bin, filename=filename, output_name="output.pdf"

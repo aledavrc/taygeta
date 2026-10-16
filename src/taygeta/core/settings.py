@@ -1,14 +1,14 @@
-"""Configuración tipada y validación de entorno para Taygeta.
+"""Typed configuration and environment validation for Taygeta.
 
-Carga la configuración desde variables de entorno y, opcionalmente, desde un
-archivo ``.env`` (nunca versionado). Mantiene separadas tres familias de
-credenciales que no deben mezclarse:
+Loads the configuration from environment variables and, optionally, from a
+``.env`` file (never versioned). It keeps three families of credentials separate,
+which must not be mixed:
 
-* LLM remoto (``LLM_*``) para estructuración y validación lógica.
-* OCR local OpenAI-compatible (``OCR_*``) para la extracción visual.
-* Almacenamiento de objetos S3/SeaweedFS (``S3_*``).
+* Remote LLM (``LLM_*``) for structuring and logical validation.
+* Local OpenAI-compatible OCR (``OCR_*``) for visual extraction.
+* S3/SeaweedFS object storage (``S3_*``).
 
-Las claves nunca se registran en logs: usa :meth:`Settings.safe_summary`.
+Keys are never logged: use :meth:`Settings.safe_summary`.
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ __all__ = ["Settings", "get_settings", "mask_secret"]
 
 
 def mask_secret(value: str | None) -> str:
-    """Devuelve una representación segura de un secreto para logs o resúmenes."""
+    """Return a safe representation of a secret for logs or summaries."""
     if not value:
         return "<empty>"
     if len(value) <= 4:
@@ -35,7 +35,7 @@ def mask_secret(value: str | None) -> str:
 
 
 class Settings(BaseSettings):
-    """Configuración de despliegue de Taygeta cargada desde el entorno."""
+    """Taygeta deployment configuration loaded from the environment."""
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -44,150 +44,145 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # -- LLM remoto (estructuración y validación lógica) --------------------
+    # -- Remote LLM (structuring and logical validation) --------------------
     LLM_API_KEY: str = Field(
         default="",
-        description="Clave API del proveedor remoto. Solo la credencial, no el endpoint.",
+        description="API key of the remote provider. The credential only, not the endpoint.",
     )
     LLM_BASE_URL: str = Field(
         default="",
-        description="URL base del endpoint remoto compatible con la API de OpenAI.",
+        description="Base URL of the remote endpoint, OpenAI API compatible.",
     )
     LLM_MODEL: str = Field(
         default="",
-        description="Identificador del modelo remoto elegido por el administrador.",
+        description="Identifier of the remote model chosen by the administrator.",
     )
-    LLM_TIMEOUT_SECONDS: int = Field(default=120, ge=1, description="Timeout por solicitud LLM.")
-    LLM_MAX_RETRIES: int = Field(default=2, ge=0, le=10, description="Reintentos acotados del LLM.")
+    LLM_TIMEOUT_SECONDS: int = Field(default=120, ge=1, description="Timeout per LLM request.")
+    LLM_MAX_RETRIES: int = Field(default=2, ge=0, le=10, description="Bounded LLM retries.")
     LLM_EMBEDDING_MODEL: str = Field(
         default="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
         description=(
-            "Modelo sentence-transformers (id de Hugging Face o ruta local) para "
-            "generar embeddings de deduplicación de forma local, sin API externa. "
-            "Se recomienda un modelo multilingüe para texto en español."
+            "sentence-transformers model (Hugging Face id or local path) to generate "
+            "deduplication embeddings locally, without an external API. A multilingual "
+            "model is recommended for Spanish text."
         ),
     )
 
-    # -- Deduplicación semántica --------------------------------------------
+    # -- Semantic deduplication ---------------------------------------------
     DUPLICATE_SIMILARITY_THRESHOLD: float = Field(
         default=0.90,
         ge=0.0,
         le=1.0,
         description=(
-            "Umbral de similitud coseno para marcar una pregunta como candidata a "
-            "duplicado durante la ingesta."
+            "Cosine similarity threshold to mark a question as a duplicate candidate "
+            "during ingestion."
         ),
     )
 
-    # -- OCR local (OpenAI-compatible) --------------------------------------
+    # -- Local OCR (OpenAI-compatible) --------------------------------------
     OCR_API_KEY: str = Field(
         default="local-ocr",
-        description="Credencial requerida por el cliente para el servicio OCR local.",
+        description="Credential required by the client for the local OCR service.",
     )
     OCR_BASE_URL: str = Field(
         default="http://ocr:8080/v1",
-        description="Endpoint OpenAI-compatible del servidor OCR local.",
+        description="OpenAI-compatible endpoint of the local OCR server.",
     )
     OCR_MODEL: str = Field(
         default="ggml-org/Qwen2.5-VL-7B-Instruct-GGUF:Q4_K_M",
-        description="Identificador de modelo que acepta el servidor OCR local.",
+        description="Model identifier accepted by the local OCR server.",
     )
     OCR_MODEL_PATH: str = Field(
         default="",
-        description="Ruta del modelo/pesos dentro del volumen persistente del OCR.",
+        description="Path of the model/weights inside the OCR persistent volume.",
     )
-    OCR_TIMEOUT_SECONDS: int = Field(
-        default=180, ge=1, description="Timeout para una solicitud de OCR."
-    )
+    OCR_TIMEOUT_SECONDS: int = Field(default=180, ge=1, description="Timeout for an OCR request.")
     OCR_CONTEXT_SIZE: int = Field(
-        default=8192, ge=512, description="Longitud de contexto del modelo OCR local."
+        default=8192, ge=512, description="Context length of the local OCR model."
     )
 
-    # -- Entorno de ejecución y base de datos -------------------------------
+    # -- Runtime environment and database -----------------------------------
     APP_ENV: Literal["local", "production"] = Field(
         default="local",
-        description="Entorno de ejecución: 'local' o 'production'.",
+        description="Execution environment: 'local' or 'production'.",
     )
     DATABASE_URL: str = Field(
         default="",
         description=(
-            "URL de la base de datos (p. ej. sqlite:////app/data/taygeta.db). "
-            "Si está vacía, se usa DB_PATH."
+            "Database URL (e.g. sqlite:////app/data/taygeta.db). If empty, DB_PATH is used."
         ),
     )
 
-    # -- SQLite y directorios runtime ---------------------------------------
-    DB_PATH: str = Field(default="/app/data/taygeta.db", description="Ruta de la base SQLite.")
+    # -- SQLite and runtime directories -------------------------------------
+    DB_PATH: str = Field(default="/app/data/taygeta.db", description="SQLite database path.")
     DOWNLOADS_DIR: str = Field(
-        default="/app/downloads", description="Directorio de entregables temporales."
+        default="/app/downloads", description="Directory of temporary deliverables."
     )
-    UPLOADS_DIR: str = Field(
-        default="/app/uploads", description="Directorio de documentos recibidos."
-    )
+    UPLOADS_DIR: str = Field(default="/app/uploads", description="Directory of received documents.")
     DOWNLOADS_TTL_SECONDS: int = Field(
         default=3600,
         ge=0,
-        description="TTL de limpieza de /app/downloads (60 minutos por defecto).",
+        description="Cleanup TTL of /app/downloads (60 minutes by default).",
     )
 
-    # -- Almacenamiento de objetos S3/SeaweedFS -----------------------------
+    # -- S3/SeaweedFS object storage ----------------------------------------
     S3_ENDPOINT_URL: str = Field(
-        default="http://seaweedfs-s3:8333", description="Endpoint interno S3."
+        default="http://seaweedfs-s3:8333", description="Internal S3 endpoint."
     )
     S3_PUBLIC_ENDPOINT: str = Field(
         default="http://localhost:8333",
         description=(
-            "Endpoint S3 público/externo para la UI (reescribe el host interno en "
-            "enlaces e imágenes para que sean accesibles desde el navegador)."
+            "Public/external S3 endpoint for the UI (rewrites the internal host in links "
+            "and images so they are reachable from the browser)."
         ),
     )
     S3_PUBLIC_BASE_URL: str = Field(
         default="http://localhost:8333",
         description=(
-            "Base pública para componer URLs de assets a partir de rutas relativas "
-            "(p. ej. https://assets.example.com). Se concatena con la ruta relativa "
-            "/buckets/{bucket}/{key} al enviar la información al frontend o al MCP."
+            "Public base for composing asset URLs from relative paths (e.g. "
+            "https://assets.example.com). It is concatenated with the relative path "
+            "/buckets/{bucket}/{key} when sending the information to the frontend or the MCP."
         ),
     )
-    S3_BUCKET: str = Field(default="taygeta-assets", description="Bucket de figuras.")
-    S3_ACCESS_KEY_ID: str = Field(default="change-me", description="Credencial de acceso S3.")
-    S3_SECRET_ACCESS_KEY: str = Field(default="change-me", description="Clave secreta S3.")
-    S3_REGION: str = Field(default="us-east-1", description="Región compatible con el cliente S3.")
+    S3_BUCKET: str = Field(default="taygeta-assets", description="Figures bucket.")
+    S3_ACCESS_KEY_ID: str = Field(default="change-me", description="S3 access credential.")
+    S3_SECRET_ACCESS_KEY: str = Field(default="change-me", description="S3 secret key.")
+    S3_REGION: str = Field(default="us-east-1", description="Region compatible with the S3 client.")
     ASSET_PUBLIC_BASE_URL: str = Field(
-        default="", description="Base pública opcional o endpoint de proxy para la UI."
+        default="", description="Optional public base or proxy endpoint for the UI."
     )
     ASSET_URL_TTL_SECONDS: int = Field(
-        default=300, ge=1, description="Duración de las URLs prefirmadas de assets."
+        default=300, ge=1, description="Lifetime of the presigned asset URLs."
     )
 
-    # -- Direcciones públicas de los servicios ------------------------------
-    MCP_HOST: str = Field(default="0.0.0.0", description="Host de escucha del servidor MCP.")
-    MCP_PORT: int = Field(default=8000, ge=1, le=65535, description="Puerto del servidor MCP.")
+    # -- Public service addresses -------------------------------------------
+    MCP_HOST: str = Field(default="0.0.0.0", description="MCP server listen host.")
+    MCP_PORT: int = Field(default=8000, ge=1, le=65535, description="MCP server port.")
     UI_PUBLIC_URL: str = Field(
         default="http://localhost:8501",
         validation_alias=AliasChoices("UI_PUBLIC_URL", "STREAMLIT_PUBLIC_URL"),
-        description="URL pública de la interfaz HITL (NiceGUI).",
+        description="Public URL of the HITL interface (NiceGUI).",
     )
     DOWNLOAD_PUBLIC_URL: str = Field(
-        default="http://localhost:8000", description="URL pública del servidor de descargas."
+        default="http://localhost:8000", description="Public URL of the downloads server."
     )
 
-    # -- Interfaz HITL (NiceGUI) --------------------------------------------
+    # -- HITL interface (NiceGUI) -------------------------------------------
     UI_LANGUAGE: str = Field(
         default="es",
         description=(
-            "Idioma por defecto de la interfaz HITL ('es' o 'en'). Cada sesión "
-            "puede cambiarlo en caliente desde la propia UI."
+            "Default language of the HITL interface ('es' or 'en'). Each session can "
+            "switch it at runtime from the UI itself."
         ),
     )
 
-    # -- Validadores --------------------------------------------------------
+    # -- Validators ---------------------------------------------------------
     @field_validator("APP_ENV", mode="before")
     @classmethod
     def _normalize_app_env(cls, value: object) -> str:
         normalized = str(value).strip().lower() if value is not None else ""
         if normalized not in ("local", "production"):
-            raise ValueError("APP_ENV debe ser 'local' o 'production'")
+            raise ValueError("APP_ENV must be 'local' or 'production'")
         return normalized
 
     @field_validator("UI_LANGUAGE", mode="before")
@@ -195,14 +190,14 @@ class Settings(BaseSettings):
     def _normalize_ui_language(cls, value: object) -> str:
         normalized = str(value).strip().lower() if value is not None else ""
         if normalized not in SUPPORTED_LOCALES:
-            raise ValueError("UI_LANGUAGE debe ser uno de: " + ", ".join(SUPPORTED_LOCALES))
+            raise ValueError("UI_LANGUAGE must be one of: " + ", ".join(SUPPORTED_LOCALES))
         return normalized
 
     @field_validator("DB_PATH", "DOWNLOADS_DIR", "UPLOADS_DIR")
     @classmethod
     def _validate_runtime_paths(cls, value: str) -> str:
         if not value.strip():
-            raise ValueError("la ruta no puede estar vacía")
+            raise ValueError("the path cannot be empty")
         return value
 
     @field_validator(
@@ -219,20 +214,20 @@ class Settings(BaseSettings):
             return value.rstrip("/")
         return value
 
-    # -- Propiedades y utilidades -------------------------------------------
+    # -- Properties and utilities -------------------------------------------
     @property
     def llm_configured(self) -> bool:
-        """Indica si el LLM remoto tiene credencial, endpoint y modelo completos."""
+        """Whether the remote LLM has a complete credential, endpoint and model."""
         return bool(self.LLM_API_KEY and self.LLM_BASE_URL and self.LLM_MODEL)
 
     @property
     def ocr_configured(self) -> bool:
-        """Indica si el OCR local tiene endpoint y modelo definidos."""
+        """Whether the local OCR has an endpoint and model defined."""
         return bool(self.OCR_BASE_URL and self.OCR_MODEL)
 
     @property
     def s3_configured(self) -> bool:
-        """Indica si el almacenamiento S3 tiene bucket y credenciales definidos."""
+        """Whether S3 storage has a bucket and credentials defined."""
         return bool(
             self.S3_ENDPOINT_URL
             and self.S3_BUCKET
@@ -242,17 +237,17 @@ class Settings(BaseSettings):
 
     @property
     def is_production(self) -> bool:
-        """Indica si la aplicación se ejecuta en el entorno de producción."""
+        """Whether the application runs in the production environment."""
         return self.APP_ENV == "production"
 
     @property
     def database_path(self) -> str:
-        """Ruta efectiva de la base de datos.
+        """Effective database path.
 
-        Si ``DATABASE_URL`` está configurada como URL ``sqlite://``, extrae la
-        ruta de la misma; en caso contrario usa ``DB_PATH``. Las URLs no SQLite
-        (p. ej. ``postgresql://``) no están soportadas por la capa SQLite actual
-        y provocan un ``ValueError`` explícito.
+        If ``DATABASE_URL`` is set to a ``sqlite://`` URL, the path is extracted
+        from it; otherwise ``DB_PATH`` is used. Non-SQLite URLs (e.g.
+        ``postgresql://``) are not supported by the current SQLite layer and raise
+        an explicit ``ValueError``.
         """
         url = (self.DATABASE_URL or "").strip()
         if not url:
@@ -260,33 +255,31 @@ class Settings(BaseSettings):
         if url == "sqlite://":
             return ":memory:"
         if url.startswith("sqlite:///"):
-            # sqlite:///rel.db  -> "rel.db"        (ruta relativa)
-            # sqlite:////abs.db -> "/abs.db"       (ruta absoluta)
+            # sqlite:///rel.db  -> "rel.db"        (relative path)
+            # sqlite:////abs.db -> "/abs.db"       (absolute path)
             # sqlite:///:memory: -> ":memory:"
             return url[len("sqlite://") :][1:]
         raise ValueError(
-            f"DATABASE_URL no soportada: {url!r}; la capa actual solo admite sqlite://"
+            f"unsupported DATABASE_URL: {url!r}; the current layer only supports sqlite://"
         )
 
     def require_llm(self) -> None:
-        """Valida que la configuración del LLM remoto esté completa.
+        """Validate that the remote LLM configuration is complete.
 
         Raises:
-            RuntimeError: si falta alguna de las variables obligatorias.
+            RuntimeError: if any of the required variables is missing.
         """
         missing = [
             name for name in ("LLM_API_KEY", "LLM_BASE_URL", "LLM_MODEL") if not getattr(self, name)
         ]
         if missing:
-            raise RuntimeError(
-                "configuración del LLM remoto incompleta; define: " + ", ".join(missing)
-            )
+            raise RuntimeError("incomplete remote LLM configuration; define: " + ", ".join(missing))
 
     def ensure_runtime_directories(self) -> list[Path]:
-        """Crea los directorios runtime necesarios y devuelve sus rutas.
+        """Create the required runtime directories and return their paths.
 
-        No crea el directorio de la base de datos si su ruta es relativa al
-        repositorio; en ese caso devuelve igualmente las rutas implicadas.
+        It does not create the database directory if its path is relative to the
+        repository; in that case it still returns the paths involved.
         """
         directories = [
             Path(self.DB_PATH).expanduser().parent,
@@ -300,7 +293,7 @@ class Settings(BaseSettings):
         return created
 
     def safe_summary(self) -> dict[str, object]:
-        """Resumen apto para logs, con todas las credenciales enmascaradas."""
+        """Log-friendly summary, with every credential masked."""
         return {
             "app_env": self.APP_ENV,
             "database_url": mask_secret(self.DATABASE_URL),
@@ -338,5 +331,5 @@ class Settings(BaseSettings):
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
-    """Devuelve una instancia única y en caché de :class:`Settings`."""
+    """Return a single, cached instance of :class:`Settings`."""
     return Settings()

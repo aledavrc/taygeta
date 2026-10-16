@@ -1,23 +1,23 @@
-"""Esquemas Pydantic v2 canónicos del proyecto Taygeta.
+"""Canonical Pydantic v2 schemas for the Taygeta project.
 
-Este módulo define los modelos de datos empleados por la ingesta híbrida, la
-clasificación curricular y el almacenamiento de preguntas.
+This module defines the data models used by the hybrid ingestion, the curricular
+classification and the question storage.
 
-Reglas transversales:
+Cross-cutting rules:
 
-* ``extra="forbid"`` en todos los modelos: cualquier campo no declarado, en
-  particular cualquier intento de añadir soluciones, claves de respuesta o
-  respuestas correctas, provoca un error de validación.
-* Los slugs curriculares (``course``, ``topic``, ``subtopic`` y prerrequisitos)
-  se validan con la expresión regular ``^[a-z0-9_]+$`` (sin espacios).
-* Los enunciados usan Markdown con matemáticas TeX ``$...$`` y ``$$...$$`` y
-  placeholders de figura ``{{fig:N}}``. Los delimitadores LaTeX no canónicos
-  (``\\[...\\]`` y ``\\(...\\)``) se normalizan automáticamente con
-  :func:`sanitize_math_delimiters` al validar los esquemas.
+* ``extra="forbid"`` on every model: any undeclared field, in particular any
+  attempt to add solutions, answer keys or correct answers, raises a validation
+  error.
+* Curricular slugs (``course``, ``topic``, ``subtopic`` and prerequisites) are
+  validated with the regular expression ``^[a-z0-9_]+$`` (no spaces).
+* Statements use Markdown with TeX math ``$...$`` and ``$$...$$`` and figure
+  placeholders ``{{fig:N}}``. Non-canonical LaTeX delimiters (``\\[...\\]`` and
+  ``\\(...\\)``) are normalized automatically with :func:`sanitize_math_delimiters`
+  when the schemas are validated.
 
-NOTA CRÍTICA: Ningún modelo admite ni almacena soluciones, claves de respuestas,
-respuestas correctas ni razonamientos que resuelvan el ejercicio. La extracción
-transcribe únicamente el contenido visible.
+CRITICAL NOTE: No model accepts or stores solutions, answer keys, correct answers
+or reasoning that solves the exercise. Extraction transcribes only the visible
+content.
 """
 
 from __future__ import annotations
@@ -63,48 +63,49 @@ __all__ = [
 
 
 # ---------------------------------------------------------------------------
-# Constantes y tipos auxiliares
+# Constants and helper types
 # ---------------------------------------------------------------------------
 
-#: Expresión regular de slugs curriculares: minúsculas, dígitos y guion bajo.
+#: Regular expression for curricular slugs: lowercase letters, digits and underscore.
 CURRICULAR_SLUG_PATTERN = r"^[a-z0-9_]+$"
 
-#: Convención explícita para marcar fragmentos ilegibles durante el OCR.
+#: Explicit convention to mark illegible fragments during OCR. Kept as a stable
+#: data marker (it is produced and consumed verbatim by the OCR pipeline).
 ILLEGIBLE_MARKER = "[ILEGIBLE]"
 
-#: Placeholders que intercalan figuras dentro del enunciado, p. ej. ``{{fig:1}}``.
+#: Placeholders that interleave figures inside the statement, e.g. ``{{fig:1}}``.
 PLACEHOLDER_PATTERN = r"\{\{fig:(\d+)\}\}"
 
-#: Prefijo canónico de las rutas relativas de assets, p. ej.
-#: ``/buckets/exams/img.png`` (equivalente a ``s3://exams/img.png``).
+#: Canonical prefix of relative asset paths, e.g.
+#: ``/buckets/exams/img.png`` (equivalent to ``s3://exams/img.png``).
 RELATIVE_ASSET_PREFIX = "/buckets/"
 
 _PLACEHOLDER_RE = re.compile(PLACEHOLDER_PATTERN)
 _FIGURE_ID_PATTERN = r"^fig:\d+$"
 
-#: Delimitadores TeX no estándar que emiten algunos modelos OCR/LLM y que rompen
-#: el renderizado de KaTeX/Typst: ``\[...\]`` denota display y ``\(...\)`` denota
-#: inline. Se toleran barras invertidas escapadas de más (``\\[``, ``\\]``).
+#: Non-standard TeX delimiters that some OCR/LLM models emit and that break
+#: KaTeX/Typst rendering: ``\[...\]`` denotes display and ``\(...\)`` denotes
+#: inline. Over-escaped backslashes (``\\[``, ``\\]``) are tolerated.
 _DISPLAY_MATH_RE = re.compile(r"\\+\[(.*?)\\+\]", re.DOTALL)
 _INLINE_MATH_RE = re.compile(r"\\+\((.*?)\\+\)", re.DOTALL)
 
-#: Slug curricular validado (minúsculas, dígitos y guion bajo, sin espacios).
+#: Validated curricular slug (lowercase letters, digits and underscore, no spaces).
 Slug = Annotated[
     str,
     StringConstraints(pattern=CURRICULAR_SLUG_PATTERN, strip_whitespace=False),
 ]
 
-#: Namespace estable para UUID5 deterministas de preguntas.
+#: Stable namespace for deterministic UUID5 question identifiers.
 _QUESTION_ID_NAMESPACE = uuid.UUID("6f9619ff-8b86-d011-b42d-00c04fc964ff")
 
 
 def slugify(value: str | None) -> str:
-    """Convierte texto libre en un slug válido ``^[a-z0-9_]+$`` (o ``""``).
+    """Turn free text into a valid slug ``^[a-z0-9_]+$`` (or ``""``).
 
-    - separa las tildes/diacríticos (``Cálculo`` → ``calculo``);
-    - pasa a minúsculas;
-    - sustituye espacios y caracteres especiales por ``_``;
-    - colapsa ``_`` repetidos y recorta los de los extremos.
+    - strips accents/diacritics (an accented letter becomes its base letter);
+    - lowercases;
+    - replaces spaces and special characters with ``_``;
+    - collapses repeated ``_`` and trims leading/trailing ones.
     """
     if value is None:
         return ""
@@ -115,19 +116,18 @@ def slugify(value: str | None) -> str:
 
 
 def normalize_slug(value: str | None, default: str = "general") -> str:
-    """Normaliza un slug y devuelve ``default`` cuando queda vacío."""
+    """Normalize a slug and return ``default`` when it ends up empty."""
     return slugify(value) or default
 
 
 def sanitize_math_delimiters(text: str) -> str:
-    """Normaliza delimitadores matemáticos TeX a ``$...$`` / ``$$...$$``.
+    """Normalize TeX math delimiters to ``$...$`` / ``$$...$$``.
 
-    Algunos modelos OCR/LLM emiten delimitadores LaTeX de estilo ``\\[...\\]``
-    (display) y ``\\(...\\)`` (inline), que KaTeX y Typst no interpretan igual que
-    los delimitadores canónicos del proyecto. Esta función los reescribe a
-    ``$$...$$`` y ``$...$`` respectivamente y tolera barras invertidas escapadas
-    de más (por ejemplo ``\\\\[...\\\\]``). Los enunciados sin esos patrones se
-    devuelven intactos.
+    Some OCR/LLM models emit LaTeX-style delimiters ``\\[...\\]`` (display) and
+    ``\\(...\\)`` (inline), which KaTeX and Typst do not interpret the same way as
+    the project's canonical delimiters. This function rewrites them to ``$$...$$``
+    and ``$...$`` respectively and tolerates over-escaped backslashes (for example
+    ``\\\\[...\\\\]``). Statements without those patterns are returned intact.
     """
     if not text:
         return text
@@ -137,13 +137,13 @@ def sanitize_math_delimiters(text: str) -> str:
 
 
 def sanitize_norm_bars(text: str) -> str:
-    """Reescribe las barras de norma LaTeX ``\\|`` como ``||`` (norma Typst).
+    """Rewrite LaTeX norm bars ``\\|`` as ``||`` (the Typst norm).
 
-    ``\\|`` es la barra de norma en LaTeX y ``||`` su equivalente en Typst; el
-    transpilador no reconoce el comando ``\\|`` y fallaría al compilar. Esta
-    función sustituye cada ``\\|`` que no esté precedida por otra barra invertida
-    (es decir, que no forme parte de un ``\\\\|``, donde ``\\\\`` es un salto de
-    línea) por ``||``. Se usa un escaneo manual, sin expresiones regulares.
+    ``\\|`` is the norm bar in LaTeX and ``||`` its Typst equivalent; the
+    transpiler does not recognize the ``\\|`` command and would fail to compile.
+    This function replaces every ``\\|`` that is not preceded by another backslash
+    (that is, one that is not part of a ``\\\\|``, where ``\\\\`` is a line break)
+    with ``||``. A manual scan is used, without regular expressions.
     """
     parts: list[str] = []
     index = 0
@@ -165,11 +165,11 @@ def sanitize_norm_bars(text: str) -> str:
 
 
 def is_relative_asset_path(value: str | None) -> bool:
-    """Indica si ``value`` es una ruta relativa de asset ``/buckets/{bucket}/{key}``.
+    """Whether ``value`` is a relative asset path ``/buckets/{bucket}/{key}``.
 
-    Rechaza segmentos vacíos, ``.`` y ``..`` para impedir traversal, pero acepta
-    el prefijo ``/buckets/`` (que, a diferencia de ``/app/...`` o ``file://``, no
-    es una ruta local absoluta sino una ruta relativa al almacenamiento público).
+    Rejects empty segments, ``.`` and ``..`` to prevent traversal, but accepts the
+    ``/buckets/`` prefix (which, unlike ``/app/...`` or ``file://``, is not an
+    absolute local path but a path relative to the public storage).
     """
     if not value or not value.startswith(RELATIVE_ASSET_PREFIX):
         return False
@@ -180,11 +180,11 @@ def is_relative_asset_path(value: str | None) -> bool:
 
 
 def get_public_url(relative_path: str) -> str:
-    """Compone la URL pública concatenando ``S3_PUBLIC_BASE_URL`` con la ruta relativa.
+    """Compose the public URL by concatenating ``S3_PUBLIC_BASE_URL`` with the relative path.
 
-    Las imágenes se almacenan en la base de datos como rutas relativas
-    ``/buckets/{bucket}/{key}``; esta función compone la URL completa justo en el
-    límite de salida. Si ``relative_path`` está vacío, devuelve ``""``.
+    Images are stored in the database as relative paths ``/buckets/{bucket}/{key}``;
+    this function composes the full URL right at the output boundary. If
+    ``relative_path`` is empty, returns ``""``.
     """
     if not relative_path:
         return ""
@@ -196,35 +196,35 @@ def get_public_url(relative_path: str) -> str:
 
 
 def compute_canonical_hash(tex_string: str) -> str:
-    """Calcula un hash canónico estable para la deduplicación de preguntas.
+    """Compute a stable canonical hash for question deduplication.
 
-    Limpia los espacios y saltos de línea del enunciado (colapsando cualquier
-    secuencia de espacios en blanco a un único espacio) y devuelve el hash
-    SHA-256 hexadecimal del contenido normalizado. No usa soluciones ni
-    respuestas correctas: solo el contenido visible del enunciado.
+    Cleans the whitespace and line breaks from the statement (collapsing any run of
+    whitespace into a single space) and returns the hexadecimal SHA-256 hash of the
+    normalized content. It uses no solutions or correct answers: only the visible
+    content of the statement.
     """
     normalized = " ".join(str(tex_string).split())
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
 def new_question_id() -> str:
-    """Genera un UUID aleatorio (versión 4) como identificador de pregunta."""
+    """Generate a random UUID (version 4) as a question identifier."""
     return str(uuid.uuid4())
 
 
 def deterministic_question_id(*parts: str) -> str:
-    """Genera un UUID5 determinista a partir de las partes indicadas.
+    """Generate a deterministic UUID5 from the given parts.
 
-    Permite que una misma pregunta obtenga siempre el mismo identificador
-    mientras su contenido de origen no cambie.
+    Allows the same question to always obtain the same identifier while its source
+    content does not change.
     """
     if not parts:
-        raise ValueError("se requiere al menos una parte para el UUID determinista")
+        raise ValueError("at least one part is required for the deterministic UUID")
     return str(uuid.uuid5(_QUESTION_ID_NAMESPACE, "|".join(parts)))
 
 
 def utc_now_iso() -> str:
-    """Devuelve la fecha/hora actual en ISO 8601 con zona horaria UTC."""
+    """Return the current date/time in ISO 8601 with UTC timezone."""
     return datetime.now(tz=UTC).isoformat()
 
 
@@ -234,18 +234,18 @@ def utc_now_iso() -> str:
 
 
 class FigureReference(BaseModel):
-    """Referencia geométrica a una figura extraída de un documento.
+    """Geometric reference to a figure extracted from a document.
 
-    ``bbox`` usa el formato ``[ymin, xmin, ymax, xmax]`` con coordenadas
-    normalizadas en el rango ``0-1000``. ``asset_path`` es un identificador
-    estable de objeto:
+    ``bbox`` uses the format ``[ymin, xmin, ymax, xmax]`` with coordinates
+    normalized to the ``0-1000`` range. ``asset_path`` is a stable object
+    identifier:
 
-    * una ruta relativa pública ``/buckets/{bucket}/{key}`` (forma canónica
-      recomendada, p. ej. ``/buckets/exams/img.png``);
-    * una URI ``s3://bucket/key``;
-    * una clave de objeto relativa al bucket (sin ``/`` inicial).
+    * a public relative path ``/buckets/{bucket}/{key}`` (recommended canonical
+      form, e.g. ``/buckets/exams/img.png``);
+    * an ``s3://bucket/key`` URI;
+    * an object key relative to the bucket (without a leading ``/``).
 
-    Nunca una ruta local absoluta como ``/app/assets/...``.
+    Never an absolute local path such as ``/app/assets/...``.
     """
 
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
@@ -253,28 +253,28 @@ class FigureReference(BaseModel):
     id: str = Field(
         ...,
         pattern=_FIGURE_ID_PATTERN,
-        description='Identificador estable de la figura, por ejemplo "fig:1".',
+        description='Stable figure identifier, for example "fig:1".',
     )
     page: int = Field(
         ...,
         ge=0,
-        description="Índice físico de la página basado en cero.",
+        description="Zero-based physical page index.",
     )
     bbox: list[int] = Field(
         ...,
         min_length=4,
         max_length=4,
-        description="Bounding box [ymin, xmin, ymax, xmax] normalizado a 0-1000.",
+        description="Bounding box [ymin, xmin, ymax, xmax] normalized to 0-1000.",
     )
     caption: str | None = Field(
         default=None,
-        description="Pie de figura visible, si existe.",
+        description="Visible figure caption, if any.",
     )
     asset_path: str | None = Field(
         default=None,
         description=(
-            "Identificador de objeto estable: ruta relativa /buckets/{bucket}/{key}, "
-            "s3://bucket/key o clave relativa. Nunca una ruta local absoluta."
+            "Stable object identifier: relative path /buckets/{bucket}/{key}, "
+            "s3://bucket/key or a relative key. Never an absolute local path."
         ),
     )
 
@@ -283,11 +283,11 @@ class FigureReference(BaseModel):
     def _validate_bbox(cls, value: list[int]) -> list[int]:
         ymin, xmin, ymax, xmax = value
         if any(coord < 0 or coord > 1000 for coord in value):
-            raise ValueError("bbox debe tener coordenadas normalizadas entre 0 y 1000")
+            raise ValueError("bbox coordinates must be normalized between 0 and 1000")
         if ymin >= ymax or xmin >= xmax:
             raise ValueError(
-                "bbox debe cumplir ymin < ymax y xmin < xmax "
-                f"(recibido [ymin={ymin}, xmin={xmin}, ymax={ymax}, xmax={xmax}])"
+                "bbox must satisfy ymin < ymax and xmin < xmax "
+                f"(received [ymin={ymin}, xmin={xmin}, ymax={ymax}, xmax={xmax}])"
             )
         return value
 
@@ -299,19 +299,19 @@ class FigureReference(BaseModel):
         if value.startswith(RELATIVE_ASSET_PREFIX):
             if not is_relative_asset_path(value):
                 raise ValueError(
-                    "la ruta relativa de asset debe tener la forma /buckets/{bucket}/{key} "
-                    "sin segmentos vacíos, '.' ni '..'"
+                    "the relative asset path must have the form /buckets/{bucket}/{key} "
+                    "without empty segments, '.' or '..'"
                 )
             return value
         if value.startswith("/") or value.startswith("file://"):
             raise ValueError(
-                "asset_path no puede ser una ruta local absoluta; usa /buckets/{bucket}/{key}, "
-                "s3://bucket/key o una clave de objeto relativa al bucket"
+                "asset_path cannot be an absolute local path; use /buckets/{bucket}/{key}, "
+                "s3://bucket/key or an object key relative to the bucket"
             )
         if re.match(r"^[a-zA-Z]:[\\/]", value):
             raise ValueError(
-                "asset_path no puede ser una ruta local absoluta de Windows; usa "
-                "/buckets/{bucket}/{key}, s3://bucket/key o una clave de objeto relativa al bucket"
+                "asset_path cannot be an absolute Windows local path; use "
+                "/buckets/{bucket}/{key}, s3://bucket/key or an object key relative to the bucket"
             )
         return value
 
@@ -322,7 +322,7 @@ class FigureReference(BaseModel):
 
 
 class Choice(BaseModel):
-    """Alternativa de una pregunta de opción múltiple."""
+    """Choice of a multiple-choice question."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -330,18 +330,18 @@ class Choice(BaseModel):
         ...,
         min_length=1,
         pattern=r"^[A-Za-z0-9]+$",
-        description='Identificador de la alternativa, por ejemplo "A", "B", "C" o "D".',
+        description='Choice identifier, for example "A", "B", "C" or "D".',
     )
     content_raw: str = Field(
         ...,
         min_length=1,
-        description="Contenido Markdown de la alternativa con expresiones matemáticas TeX.",
+        description="Markdown content of the choice with TeX math expressions.",
     )
 
     @field_validator("content_raw", mode="before")
     @classmethod
     def _normalize_content_math(cls, value: Any) -> Any:
-        """Normaliza los delimitadores matemáticos antes de validar la alternativa."""
+        """Normalize the math delimiters before validating the choice."""
         return sanitize_math_delimiters(value) if isinstance(value, str) else value
 
 
@@ -351,43 +351,42 @@ class Choice(BaseModel):
 
 
 class QuestionRaw(BaseModel):
-    """Pregunta transcrita y estructurada, sin solución ni respuesta correcta.
+    """Transcribed and structured question, with no solution or correct answer.
 
-    El enunciado usa Markdown con ``$...$`` y ``$$...$$`` para matemáticas y
-    placeholders ``{{fig:N}}`` para intercalar figuras en el punto exacto del
-    flujo de lectura. Los placeholders y las figuras declaradas deben coincidir
-    uno a uno.
+    The statement uses Markdown with ``$...$`` and ``$$...$$`` for math and
+    ``{{fig:N}}`` placeholders to interleave figures at the exact point in the
+    reading flow. Placeholders and declared figures must match one to one.
     """
 
     model_config = ConfigDict(extra="forbid")
 
     id: str = Field(
         ...,
-        description="UUID determinista o generado que identifica la pregunta.",
+        description="Deterministic or generated UUID that identifies the question.",
     )
     statement_raw: str = Field(
         ...,
         min_length=1,
         description=(
-            "Enunciado en Markdown con matemáticas $...$ / $$...$$ y placeholders "
-            "{{fig:N}} para figuras."
+            "Statement in Markdown with $...$ / $$...$$ math and {{fig:N}} "
+            "placeholders for figures."
         ),
     )
     question_type: Literal["multiple_choice", "open_ended", "true_false", "numerical"] = Field(
         ...,
-        description="Tipo de pregunta según su formato visible.",
+        description="Question type according to its visible format.",
     )
     choices: list[Choice] | None = Field(
         default=None,
-        description="Alternativas; obligatorias (>= 2) para multiple_choice.",
+        description="Choices; required (>= 2) for multiple_choice.",
     )
     figures: list[FigureReference] = Field(
         default_factory=list,
-        description="Figuras referenciadas por el enunciado mediante {{fig:N}}.",
+        description="Figures referenced by the statement through {{fig:N}}.",
     )
     notation_notes: list[str] = Field(
         default_factory=list,
-        description="Notas sobre ambigüedades o incertidumbres de notación detectadas.",
+        description="Notes about detected notation ambiguities or uncertainties.",
     )
 
     @field_validator("id")
@@ -396,18 +395,17 @@ class QuestionRaw(BaseModel):
         try:
             uuid.UUID(value)
         except (ValueError, AttributeError, TypeError) as exc:
-            raise ValueError("id debe ser un UUID válido") from exc
+            raise ValueError("id must be a valid UUID") from exc
         return value
 
     @field_validator("statement_raw", mode="before")
     @classmethod
     def _normalize_statement_math(cls, value: Any) -> Any:
-        """Sanitiza los delimitadores matemáticos justo al validar/ingerir.
+        """Sanitize the math delimiters right when validating/ingesting.
 
-        Se aplica antes de la validación del modelo y, por tanto, antes de
-        cualquier persistencia: todo ``statement_raw`` que entra al sistema
-        (ingesta, refinamiento, UI o base de datos) queda con ``$...$`` y
-        ``$$...$$``.
+        It runs before model validation and, therefore, before any persistence:
+        every ``statement_raw`` that enters the system (ingestion, refinement, UI
+        or database) ends up with ``$...$`` and ``$$...$$``.
         """
         return sanitize_math_delimiters(value) if isinstance(value, str) else value
 
@@ -415,7 +413,7 @@ class QuestionRaw(BaseModel):
     def _validate_structure(self) -> QuestionRaw:
         figure_ids = [figure.id for figure in self.figures]
         if len(figure_ids) != len(set(figure_ids)):
-            raise ValueError("los identificadores de figuras deben ser únicos")
+            raise ValueError("figure identifiers must be unique")
 
         declared = set(figure_ids)
         referenced = {f"fig:{match}" for match in _PLACEHOLDER_RE.findall(self.statement_raw)}
@@ -423,23 +421,23 @@ class QuestionRaw(BaseModel):
         unused = sorted(declared - referenced)
         if missing:
             raise ValueError(
-                "el enunciado referencia placeholders sin figura declarada: " + ", ".join(missing)
+                "the statement references placeholders without a declared figure: "
+                + ", ".join(missing)
             )
         if unused:
             raise ValueError(
-                "hay figuras declaradas sin placeholder en el enunciado: " + ", ".join(unused)
+                "there are declared figures without a placeholder in the statement: "
+                + ", ".join(unused)
             )
 
         if self.question_type == "multiple_choice":
             choices = self.choices or []
             if len(choices) < 2:
-                raise ValueError(
-                    "las preguntas multiple_choice requieren al menos dos alternativas"
-                )
+                raise ValueError("multiple_choice questions require at least two choices")
         if self.choices is not None:
             choice_ids = [choice.id for choice in self.choices]
             if len(choice_ids) != len(set(choice_ids)):
-                raise ValueError("los identificadores de alternativas deben ser únicos")
+                raise ValueError("choice identifiers must be unique")
         return self
 
 
@@ -449,46 +447,46 @@ class QuestionRaw(BaseModel):
 
 
 class EnrichedQuestion(QuestionRaw):
-    """Pregunta raw enriquecida con clasificación curricular y metadatos."""
+    """Raw question enriched with curricular classification and metadata."""
 
     model_config = ConfigDict(extra="forbid")
 
     course: Slug = Field(
         ...,
-        description="Slug del curso, sin espacios (regex ^[a-z0-9_]+$).",
+        description="Course slug, without spaces (regex ^[a-z0-9_]+$).",
     )
     topic: Slug = Field(
         ...,
-        description="Slug del tema, sin espacios (regex ^[a-z0-9_]+$).",
+        description="Topic slug, without spaces (regex ^[a-z0-9_]+$).",
     )
     subtopic: Slug | None = Field(
         default=None,
-        description="Slug del subtema, sin espacios, o None (regex ^[a-z0-9_]+$).",
+        description="Subtopic slug, without spaces, or None (regex ^[a-z0-9_]+$).",
     )
     difficulty: int = Field(
         ...,
         ge=1,
         le=5,
-        description="Dificultad curricular en el rango 1-5.",
+        description="Curricular difficulty in the 1-5 range.",
     )
     prerequisites: list[Slug] = Field(
         default_factory=list,
-        description="Slugs de los prerrequisitos (formato ^[a-z0-9_]+$).",
+        description="Prerequisite slugs (format ^[a-z0-9_]+$).",
     )
     source_metadata: dict[str, Any] = Field(
         default_factory=dict,
-        description="Metadatos del documento de origen (páginas, fichero, etc.).",
+        description="Source document metadata (pages, file, etc.).",
     )
     created_at: str = Field(
         ...,
-        description="Fecha/hora de creación en ISO 8601, preferentemente con zona horaria.",
+        description="Creation date/time in ISO 8601, preferably with a timezone.",
     )
     canonical_hash: str | None = Field(
         default=None,
         description=(
-            "Hash canónico (hex SHA-256) del enunciado normalizado, para la "
-            "deduplicación futura. Se calcula con ``compute_canonical_hash`` y nunca "
-            "incluye soluciones ni respuestas correctas."
+            "Canonical hash (hex SHA-256) of the normalized statement, for future "
+            "deduplication. Computed with ``compute_canonical_hash`` and it never "
+            "includes solutions or correct answers."
         ),
     )
 
@@ -502,21 +500,21 @@ class EnrichedQuestion(QuestionRaw):
             datetime.fromisoformat(candidate)
         except ValueError as exc:
             raise ValueError(
-                f"created_at debe ser una fecha/hora ISO 8601 válida (recibido {value!r})"
+                f"created_at must be a valid ISO 8601 date/time (received {value!r})"
             ) from exc
         return value
 
     @field_validator("prerequisites", mode="before")
     @classmethod
     def _normalize_prerequisites(cls, value: Any) -> list[str]:
-        """Normaliza y deduplica los prerrequisitos antes de validarlos.
+        """Normalize and deduplicate the prerequisites before validating them.
 
-        Tolera una cadena suelta (separada por comas o punto y coma) y aplica
-        ``slugify`` a cada elemento, descartando vacíos y duplicados. La
-        canonicalización semántica (reutilización de slugs ya existentes en la
-        base de datos) la realiza el LLM durante la estructuración mediante el
-        catálogo dinámico inyectado en el prompt; aquí solo se garantiza el
-        formato básico ``^[a-z0-9_]+$`` impuesto por :data:`Slug`.
+        Tolerates a bare string (comma- or semicolon-separated) and applies
+        ``slugify`` to each element, discarding empties and duplicates. Semantic
+        canonicalization (reuse of slugs already present in the database) is done
+        by the LLM during structuring through the dynamic catalog injected into the
+        prompt; here only the basic ``^[a-z0-9_]+$`` format imposed by :data:`Slug`
+        is guaranteed.
         """
         if value is None:
             return []
@@ -535,17 +533,17 @@ class EnrichedQuestion(QuestionRaw):
 
 
 # ---------------------------------------------------------------------------
-# 3.5. Esquema interno de transcripción
+# 3.5. Internal transcription schema
 # ---------------------------------------------------------------------------
 
 
 class TranscriptionIntermediate(BaseModel):
-    """Salida cruda del OCR local antes del pase remoto de estructuración.
+    """Raw output of the local OCR before the remote structuring pass.
 
-    Conserva el texto Markdown/TeX bruto, la referencia de origen, las páginas
-    involucradas, la información de figuras y las advertencias de lectura. NO
-    sustituye a :class:`QuestionRaw`: no realiza clasificación curricular ni
-    validación lógica.
+    Keeps the raw Markdown/TeX text, the source reference, the pages involved, the
+    figure information and the reading warnings. It does NOT replace
+    :class:`QuestionRaw`: it performs no curricular classification or logical
+    validation.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -553,30 +551,30 @@ class TranscriptionIntermediate(BaseModel):
     source_reference: str = Field(
         ...,
         min_length=1,
-        description="Referencia estable del origen (nombre de fichero o identificador).",
+        description="Stable source reference (file name or identifier).",
     )
     raw_markdown: str = Field(
         ...,
-        description="Texto Markdown/TeX bruto transcrito por el OCR local.",
+        description="Raw Markdown/TeX text transcribed by the local OCR.",
     )
     pages: list[int] = Field(
         default_factory=list,
-        description="Índices físicos de página involucrados, basados en cero.",
+        description="Zero-based physical page indices involved.",
     )
     figures: list[FigureReference] = Field(
         default_factory=list,
-        description="Figuras detectadas con su geometría y referencia de origen.",
+        description="Detected figures with their geometry and source reference.",
     )
     warnings: list[str] = Field(
         default_factory=list,
-        description="Advertencias de lectura, incluidos segmentos marcados como ilegibles.",
+        description="Reading warnings, including segments marked as illegible.",
     )
 
     @field_validator("pages")
     @classmethod
     def _validate_pages(cls, value: list[int]) -> list[int]:
         if any(page < 0 for page in value):
-            raise ValueError("los índices de página deben ser mayores o iguales a cero")
+            raise ValueError("page indices must be greater than or equal to zero")
         if len(value) != len(set(value)):
-            raise ValueError("los índices de página deben ser únicos")
+            raise ValueError("page indices must be unique")
         return value

@@ -1,12 +1,12 @@
-"""Utilidades numéricas para la deduplicación semántica por embeddings.
+"""Numeric helpers for embedding-based semantic deduplication.
 
-Taygeta calcula la similitud coseno en memoria (Python puro, sin dependencias
-extra) porque el volumen de preguntas es bajo. Los vectores se almacenan en
-SQLite como texto JSON en la columna ``questions.embedding_json``.
+Taygeta computes cosine similarity in memory (pure Python, no extra
+dependencies) because the question volume is low. Vectors are stored in SQLite as
+JSON text in the ``questions.embedding_json`` column.
 
-Ninguna de estas funciones maneja soluciones ni respuestas correctas: operan
-únicamente sobre vectores numéricos derivados del contenido visible del
-enunciado y sus alternativas.
+None of these functions handle solutions or correct answers: they operate solely
+on numeric vectors derived from the visible content of the statement and its
+choices.
 """
 
 from __future__ import annotations
@@ -19,10 +19,10 @@ __all__ = ["cosine_similarity", "decode_embedding", "encode_embedding"]
 
 
 def cosine_similarity(a: Sequence[float], b: Sequence[float]) -> float:
-    """Devuelve la similitud coseno entre dos vectores, en el rango [-1, 1].
+    """Return the cosine similarity between two vectors, in the range [-1, 1].
 
-    Si alguno de los vectores está vacío, difieren en longitud o tienen norma
-    cero, devuelve ``0.0`` (sin similitud) en lugar de elevar un error.
+    If either vector is empty, they differ in length or have zero norm, returns
+    ``0.0`` (no similarity) instead of raising an error.
     """
     if not a or not b or len(a) != len(b):
         return 0.0
@@ -39,14 +39,14 @@ def cosine_similarity(a: Sequence[float], b: Sequence[float]) -> float:
 
 
 def encode_embedding(vector: Sequence[float] | None) -> str | None:
-    """Serializa un vector de embedding como texto JSON, o ``None`` si está vacío."""
+    """Serialize an embedding vector as JSON text, or ``None`` if it is empty."""
     if not vector:
         return None
     return json.dumps([float(x) for x in vector])
 
 
 def decode_embedding(value: str | None) -> list[float]:
-    """Deserializa un embedding JSON almacenado; devuelve ``[]`` si es inválido."""
+    """Deserialize a stored JSON embedding; returns ``[]`` if it is invalid."""
     if not value:
         return []
     try:

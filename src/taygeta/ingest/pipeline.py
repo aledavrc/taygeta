@@ -382,19 +382,19 @@ class IngestPipeline:
         page_figures = [figure for figure in figures if figure.page == page_index]
         if not page_figures:
             return ""
-        lines = ["Figuras detectadas por geometría en esta página:"]
+        lines = ["Figures detected by geometry on this page:"]
         for figure in page_figures:
             ymin, xmin, ymax, xmax = figure.bbox
             lines.append(
-                f"- {figure.id}: región normalizada [ymin={ymin}, xmin={xmin}, "
+                f"- {figure.id}: normalized region [ymin={ymin}, xmin={xmin}, "
                 f"ymax={ymax}, xmax={xmax}]"
             )
         lines.append(
-            "No todas estas regiones son necesariamente diagramas útiles: puede "
-            "haber fondos, logotipos o páginas escaneadas. Inserta el placeholder "
-            "{{fig:N}} SOLO si el enunciado depende explícitamente de un gráfico, "
-            "diagrama o ilustración dentro de esa región; si no hay tal figura, no "
-            "insertes ningún placeholder ni declares fig:N."
+            "Not all of these regions are necessarily useful diagrams: there may be "
+            "backgrounds, logos or scanned pages. Insert the placeholder {{fig:N}} "
+            "ONLY if the statement explicitly depends on a graph, diagram or "
+            "illustration within that region; if there is no such figure, do not "
+            "insert any placeholder and do not declare fig:N."
         )
         return "\n".join(lines)
 

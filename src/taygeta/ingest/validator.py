@@ -425,19 +425,20 @@ class LogicalValidationResult(BaseModel):
     rejection_reason: str = Field(default="")
 
 
-_SEMANTIC_SYSTEM_PROMPT = """Eres un revisor de calidad de enunciados de exámenes \
-científicos. Evalúa SOLO la legibilidad y la suficiencia del enunciado. NO resuelvas \
-el ejercicio, NO calcules su resultado y NO evalúes si la respuesta es correcta.
+_SEMANTIC_SYSTEM_PROMPT = """You are a quality reviewer of scientific exam \
+question statements. Evaluate ONLY the legibility and sufficiency of the \
+statement. Do NOT solve the exercise, do NOT compute its result and do NOT \
+evaluate whether the answer is correct.
 
-Considera el enunciado INVALIDO (is_valid=false) si:
-- está truncado o incompleto;
-- contiene alternativas incompletas o mal delimitadas;
-- presenta contradicciones textuales obvias;
-- no contiene información suficiente para entender qué se solicita;
-- tiene problemas de estructura que impiden su lectura.
+Consider the statement INVALID (is_valid=false) if:
+- it is truncated or incomplete;
+- it contains incomplete or poorly delimited choices;
+- it presents obvious textual contradictions;
+- it does not contain enough information to understand what is being asked;
+- it has structural problems that prevent reading it.
 
-En caso de ser inválido, escribe un rejection_reason breve y concreto en español \
-indicando el problema. Si es válido, deja rejection_reason vacío.
+If it is invalid, write a brief, concrete rejection_reason in English indicating \
+the problem. If it is valid, leave rejection_reason empty.
 """
 
 
@@ -499,16 +500,16 @@ class SemanticValidator:
             RemoteValidationError: if the provider fails or the response cannot
                 be validated.
         """
-        user_text = "Enunciado a revisar (Markdown/TeX):\n\n" + question.statement_raw
+        user_text = "Statement to review (Markdown/TeX):\n\n" + question.statement_raw
         if question.choices:
             alternatives = "\n".join(
                 f"{choice.id}: {choice.content_raw}" for choice in question.choices
             )
-            user_text += f"\n\nAlternativas:\n{alternatives}"
-        user_text += f"\n\nTipo: {question.question_type}"
+            user_text += f"\n\nChoices:\n{alternatives}"
+        user_text += f"\n\nType: {question.question_type}"
         if hints:
-            user_text += f"\n\nContexto adicional del revisor: {hints}"
-        user_text += "\n\nEvalúa y devuelve is_valid y rejection_reason."
+            user_text += f"\n\nAdditional context from the reviewer: {hints}"
+        user_text += "\n\nEvaluate and return is_valid and rejection_reason."
 
         try:
             result = self.client.chat.completions.create(

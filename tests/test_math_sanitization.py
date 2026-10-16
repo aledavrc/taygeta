@@ -79,4 +79,4 @@ def test_enriched_question_sanitizes_statement() -> None:
 def test_prompts_enforce_standard_delimiters(prompt: str) -> None:
     assert "$...$" in prompt
     assert "$$...$$" in prompt
-    assert "PROHIBIDO" in prompt
+    assert "PROHIBITED" in prompt

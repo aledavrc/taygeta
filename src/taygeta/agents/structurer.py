@@ -90,16 +90,16 @@ def _build_dynamic_curriculum_prompt(
     inventing variants.
     """
     header = (
-        "CATÁLOGO DE CURSOS Y TEMAS QUE YA EXISTEN EN LA BASE DE DATOS:\n"
-        "Aquí tienes el catálogo de cursos y temas que YA EXISTEN en la base de datos. "
-        "Si el contenido de la pregunta corresponde a uno de estos, DEBES usar el slug "
-        "exacto listado. Solo inventa un slug nuevo si la materia o tema es genuinamente "
-        "nuevo y no existe en el catálogo."
+        "CATALOG OF COURSES AND TOPICS THAT ALREADY EXIST IN THE DATABASE:\n"
+        "Here is the catalog of courses and topics that ALREADY EXIST in the database. "
+        "If the content of the question matches one of them, you MUST use the exact slug "
+        "listed. Only coin a new slug if the subject or topic is genuinely new and does "
+        "not exist in the catalog."
     )
     if not taxonomy_tree:
         return (
-            header + "\n(El catálogo está vacío: aún no hay cursos ni temas confirmados en la "
-            "base de datos; puedes proponer slugs nuevos en snake_case.)"
+            header + "\n(The catalog is empty: there are no confirmed courses or topics in "
+            "the database yet; you may propose new snake_case slugs.)"
         )
     lines: list[str] = [header]
     for course in sorted(taxonomy_tree):
@@ -108,7 +108,7 @@ def _build_dynamic_curriculum_prompt(
         topic_desc = ", ".join(
             f"`{topic}`{_names_suffix(names, 'topic', course, topic)}" for topic in sorted(topics)
         )
-        lines.append(f"- Curso: `{course}`{course_suffix} -> Temas: {topic_desc}")
+        lines.append(f"- Course: `{course}`{course_suffix} -> Topics: {topic_desc}")
         for topic in sorted(topics):
             subtopics = sorted(topics[topic])
             if subtopics:
@@ -116,7 +116,7 @@ def _build_dynamic_curriculum_prompt(
                     f"`{subtopic}`{_names_suffix(names, 'subtopic', course, subtopic)}"
                     for subtopic in subtopics
                 )
-                lines.append(f"    - `{course}` / `{topic}` -> Subtemas: {subtopic_desc}")
+                lines.append(f"    - `{course}` / `{topic}` -> Subtopics: {subtopic_desc}")
     return "\n".join(lines)
 
 
@@ -132,15 +132,15 @@ def _build_dynamic_prerequisites_prompt(
     is annotated with its existing localized names.
     """
     header = (
-        "CATÁLOGO DE PRERREQUISITOS QUE YA EXISTEN EN LA BASE DE DATOS:\n"
-        "Reutiliza estos slugs exactos cuando un concepto previo del ejercicio sea "
-        "equivalente o afín a uno de ellos (ignorando singular/plural, artículos o "
-        "sinónimos matemáticos comunes)."
+        "CATALOG OF PREREQUISITES THAT ALREADY EXIST IN THE DATABASE:\n"
+        "Reuse these exact slugs when a prior concept of the exercise is equivalent or "
+        "akin to one of them (ignoring singular/plural, articles or common mathematical "
+        "synonyms)."
     )
     if not prerequisites:
         return (
-            header + "\n(El catálogo está vacío: aún no hay prerrequisitos confirmados en la "
-            "base de datos; puedes proponer slugs nuevos en snake_case.)"
+            header + "\n(The catalog is empty: there are no confirmed prerequisites in the "
+            "database yet; you may propose new snake_case slugs.)"
         )
     formatted_slugs = "\n".join(
         f"- `{slug}`{_names_suffix(names, 'prerequisite', '', slug)}"
@@ -149,45 +149,43 @@ def _build_dynamic_prerequisites_prompt(
     return header + "\n" + formatted_slugs
 
 
-_STRUCTURING_SYSTEM_PROMPT = """Eres un estructurador de preguntas de exámenes \
-científicos. A partir del texto transcrito por OCR, devuelve UNA lista de \
-preguntas y, en la MISMA respuesta, infiere para cada una tanto el enunciado \
-formateado como su clasificación curricular. Reglas:
+_STRUCTURING_SYSTEM_PROMPT = """You are a structurer of scientific exam questions. \
+From the text transcribed by OCR, return ONE list of questions and, in the SAME \
+response, infer for each one both the formatted statement and its curricular \
+classification. Rules:
 
-1. statement_raw: enunciado en Markdown/TeX, conservando los placeholders \
-{{fig:N}} exactamente en su posición y asociándolos solo a las figuras \
-declaradas. Inserta {{fig:N}} SOLO si el enunciado depende explícitamente de \
-un gráfico, diagrama o ilustración presente en esa región; si no hay una \
-figura explícita, NO declares fig:N ni insertes placeholder alguno. \
-Delimitadores matemáticos OBLIGATORIOS: usa EXCLUSIVAMENTE $...$ \
-para matemáticas inline y $$...$$ para matemáticas en bloque; PROHIBIDO \
-\\[...\\], \\], \\(...\\), \\( o \\), así como sus variantes escapadas \
-(reescríbelos siempre como $$...$$ o $...$ respectivamente).
-2. question_type: multiple_choice (si hay alternativas A/B/C/D...), open_ended, \
-true_false o numerical.
-3. choices: alternativas (mínimo 2 para multiple_choice).
-4. notation_notes: incertidumbres de lectura; no las resuelvas inventando texto.
-5. course: slug del curso en snake_case (minúsculas, dígitos y guion bajo; sin \
-espacios ni tildes). DEBES reutilizar el slug exacto del catálogo de cursos y \
-temas adjunto abajo si la materia corresponde a un curso ya existente; solo \
-inventa un slug nuevo si la materia es genuinamente nueva y no aparece en el \
-catálogo.
-6. topic: slug del tema dentro del curso (snake_case), reutilizando el slug \
-exacto del catálogo adjunto si el tema ya existe.
-7. subtopic: slug del subtema (snake_case) o null si no aplica; reutiliza el \
-slug exacto del catálogo si el subtema ya existe.
-8. difficulty: entero 1-5 según la COMPLEJIDAD MATEMÁTICA; NO lo fijes en 3.
-9. prerequisites: lista de conceptos matemáticos previos en snake_case. Para \
-cada concepto identificado:
-   a. MAPEO DINÁMICO OBLIGATORIO: Compara semánticamente el concepto contra el \
-catálogo de prerrequisitos adjunto abajo (leído de la base de datos). Si el \
-concepto equivale a un término existente (ignorando número singular/plural, \
-sinónimos matemáticos o leves diferencias de redacción), DEBES usar exactamente \
-el slug del catálogo.
-   b. DEDUPLICACIÓN: No devuelvas slugs duplicados ni redundantes.
-   c. NUEVOS CONCEPTOS: Solo si el concepto matemático no tiene ninguna \
-equivalencia en el catálogo, acuña un nuevo slug conciso en snake_case \
-(preferentemente en singular, sin artículos innecesarios).
+1. statement_raw: statement in Markdown/TeX, keeping the {{fig:N}} placeholders \
+exactly in their position and associating them only with the declared figures. \
+Insert {{fig:N}} ONLY if the statement explicitly depends on a graph, diagram or \
+illustration present in that region; if there is no explicit figure, do NOT \
+declare fig:N and do not insert any placeholder. \
+MANDATORY math delimiters: use EXCLUSIVELY $...$ for inline math and $$...$$ \
+for display math; PROHIBITED \\[...\\], \\], \\(...\\), \\( or \\), as well as \
+their escaped variants (always rewrite them as $$...$$ or $...$ respectively).
+2. question_type: multiple_choice (if there are A/B/C/D... choices), open_ended, \
+true_false or numerical.
+3. choices: choices (minimum 2 for multiple_choice).
+4. notation_notes: reading uncertainties; do not resolve them by inventing text.
+5. course: course slug in snake_case (lowercase, digits and underscore; no \
+spaces or accents). You MUST reuse the exact slug from the course and topic \
+catalog attached below if the subject matches an already existing course; only \
+coin a new slug if the subject is genuinely new and does not appear in the \
+catalog.
+6. topic: topic slug within the course (snake_case), reusing the exact slug from \
+the attached catalog if the topic already exists.
+7. subtopic: subtopic slug (snake_case) or null if it does not apply; reuse the \
+exact slug from the catalog if the subtopic already exists.
+8. difficulty: integer 1-5 based on the MATHEMATICAL COMPLEXITY; do NOT fix it at 3.
+9. prerequisites: list of prior mathematical concepts in snake_case. For each \
+identified concept:
+   a. MANDATORY DYNAMIC MAPPING: compare the concept semantically against the \
+prerequisite catalog attached below (read from the database). If the concept is \
+equivalent to an existing term (ignoring singular/plural number, mathematical \
+synonyms or slight wording differences), you MUST use exactly the catalog slug.
+   b. DEDUPLICATION: do not return duplicate or redundant slugs.
+   c. NEW CONCEPTS: only if the mathematical concept has no equivalence in the \
+catalog, coin a new concise snake_case slug (preferably singular, without \
+unnecessary articles).
 10. localization: for every taxonomy entry you emit, also provide human-readable \
 DISPLAY NAMES in Spanish and English — course_name, topic_name, subtopic_name \
 (null when there is no subtopic) and prerequisite_names (one entry per \
@@ -195,50 +193,48 @@ prerequisite, each with its slug, es and en). Names are presentation only: keep 
 the slugs unchanged, NEVER include solutions or answers, and reuse the existing \
 localized names shown in the catalog below whenever a slug already has one.
 
-No resuelvas el ejercicio, no añadas soluciones ni respuestas correctas y no \
-inventes datos que no se deduzcan del enunciado.
+Do not solve the exercise, do not add solutions or correct answers, and do not \
+invent data that cannot be deduced from the statement.
 """
 
-_REFINING_SYSTEM_PROMPT = """Eres un revisor de preguntas de exámenes científicos. \
-Recibes una pregunta ya estructurada y un contexto correctivo del revisor humano. \
-Corrige el enunciado aplicando el contexto correctivo y, en la MISMA respuesta, \
-re-infiere la clasificación curricular completa. Reglas:
+_REFINING_SYSTEM_PROMPT = """You are a reviewer of scientific exam questions. \
+You receive an already structured question and a corrective context from the human \
+reviewer. Fix the statement by applying the corrective context and, in the SAME \
+response, re-infer the full curricular classification. Rules:
 
-1. statement_raw: corrige el enunciado en Markdown/TeX aplicando el contexto \
-correctivo, conservando los placeholders {{fig:N}} exactamente en su posición y \
-asociándolos solo a las figuras declaradas. Inserta {{fig:N}} SOLO si el \
-enunciado depende explícitamente de un gráfico, diagrama o ilustración \
-presente en esa región; si no hay una figura explícita, NO declares fig:N ni \
-insertes placeholder alguno. Delimitadores matemáticos \
-OBLIGATORIOS: usa EXCLUSIVAMENTE $...$ para matemáticas inline y $$...$$ para \
-matemáticas en bloque; PROHIBIDO \\[...\\], \\], \\(...\\), \\( o \\), así como \
-sus variantes escapadas (reescríbelos siempre como $$...$$ o $...$ \
-respectivamente).
-2. question_type: multiple_choice (si hay alternativas A/B/C/D...), open_ended, \
-true_false o numerical.
-3. choices: alternativas corregidas (mínimo 2 para multiple_choice).
-4. notation_notes: incertidumbres de lectura; no las resuelvas inventando texto.
-5. course: slug del curso en snake_case (minúsculas, dígitos y guion bajo; sin \
-espacios ni tildes), re-inferido del nuevo contexto. DEBES reutilizar el slug \
-exacto del catálogo de cursos y temas adjunto abajo si la materia corresponde a \
-un curso ya existente; solo inventa un slug nuevo si la materia es genuinamente \
-nueva y no aparece en el catálogo.
-6. topic: slug del tema dentro del curso (snake_case), reutilizando el slug \
-exacto del catálogo adjunto si el tema ya existe.
-7. subtopic: slug del subtema (snake_case) o null si no aplica; reutiliza el \
-slug exacto del catálogo si el subtema ya existe.
-8. difficulty: entero 1-5 según la COMPLEJIDAD MATEMÁTICA; NO lo fijes en 3.
-9. prerequisites: lista de conceptos previos como slugs snake_case. Para cada \
-concepto identificado:
-   a. MAPEO DINÁMICO OBLIGATORIO: Compara semánticamente el concepto contra el \
-catálogo de prerrequisitos adjunto abajo (leído de la base de datos). Si el \
-concepto equivale a un término existente (ignorando número singular/plural, \
-sinónimos matemáticos o leves diferencias de redacción), DEBES usar exactamente \
-el slug del catálogo.
-   b. DEDUPLICACIÓN: No devuelvas slugs duplicados ni redundantes.
-   c. NUEVOS CONCEPTOS: Solo si el concepto matemático no tiene ninguna \
-equivalencia en el catálogo, acuña un nuevo slug conciso en snake_case \
-(preferentemente en singular, sin artículos innecesarios).
+1. statement_raw: fix the statement in Markdown/TeX by applying the corrective \
+context, keeping the {{fig:N}} placeholders exactly in their position and \
+associating them only with the declared figures. Insert {{fig:N}} ONLY if the \
+statement explicitly depends on a graph, diagram or illustration present in that \
+region; if there is no explicit figure, do NOT declare fig:N and do not insert \
+any placeholder. MANDATORY math delimiters: use EXCLUSIVELY $...$ for inline math \
+and $$...$$ for display math; PROHIBITED \\[...\\], \\], \\(...\\), \\( or \\), as \
+well as their escaped variants (always rewrite them as $$...$$ or $...$ \
+respectively).
+2. question_type: multiple_choice (if there are A/B/C/D... choices), open_ended, \
+true_false or numerical.
+3. choices: corrected choices (minimum 2 for multiple_choice).
+4. notation_notes: reading uncertainties; do not resolve them by inventing text.
+5. course: course slug in snake_case (lowercase, digits and underscore; no spaces \
+or accents), re-inferred from the new context. You MUST reuse the exact slug from \
+the course and topic catalog attached below if the subject matches an already \
+existing course; only coin a new slug if the subject is genuinely new and does not \
+appear in the catalog.
+6. topic: topic slug within the course (snake_case), reusing the exact slug from \
+the attached catalog if the topic already exists.
+7. subtopic: subtopic slug (snake_case) or null if it does not apply; reuse the \
+exact slug from the catalog if the subtopic already exists.
+8. difficulty: integer 1-5 based on the MATHEMATICAL COMPLEXITY; do NOT fix it at 3.
+9. prerequisites: list of prior concepts as snake_case slugs. For each identified \
+concept:
+   a. MANDATORY DYNAMIC MAPPING: compare the concept semantically against the \
+prerequisite catalog attached below (read from the database). If the concept is \
+equivalent to an existing term (ignoring singular/plural number, mathematical \
+synonyms or slight wording differences), you MUST use exactly the catalog slug.
+   b. DEDUPLICATION: do not return duplicate or redundant slugs.
+   c. NEW CONCEPTS: only if the mathematical concept has no equivalence in the \
+catalog, coin a new concise snake_case slug (preferably singular, without \
+unnecessary articles).
 10. localization: for every taxonomy entry you emit, also provide human-readable \
 DISPLAY NAMES in Spanish and English — course_name, topic_name, subtopic_name \
 (null when there is no subtopic) and prerequisite_names (one entry per \
@@ -246,8 +242,8 @@ prerequisite, each with its slug, es and en). Names are presentation only: keep 
 the slugs unchanged, NEVER include solutions or answers, and reuse the existing \
 localized names shown in the catalog below whenever a slug already has one.
 
-No resuelvas el ejercicio, no añadas soluciones ni respuestas correctas y no \
-inventes datos que no se deduzcan del enunciado.
+Do not solve the exercise, do not add solutions or correct answers, and do not \
+invent data that cannot be deduced from the statement.
 """
 
 
@@ -556,27 +552,27 @@ class Structurer:
     def _build_user_message(
         self, intermediate: TranscriptionIntermediate, hints: str | None
     ) -> str:
-        lines = ["Texto transcrito del OCR (Markdown/TeX):", "", intermediate.raw_markdown]
+        lines = ["Text transcribed by OCR (Markdown/TeX):", "", intermediate.raw_markdown]
         lines += [
             "",
-            "Metadatos:",
-            f"- Origen: {intermediate.source_reference}",
-            f"- Páginas: {', '.join(str(p) for p in intermediate.pages) or '(ninguna)'}",
+            "Metadata:",
+            f"- Source: {intermediate.source_reference}",
+            f"- Pages: {', '.join(str(p) for p in intermediate.pages) or '(none)'}",
         ]
         if intermediate.figures:
-            lines.append("- Figuras disponibles:")
+            lines.append("- Available figures:")
             for figure in intermediate.figures:
                 ymin, xmin, ymax, xmax = figure.bbox
                 lines.append(
-                    f"  - {figure.id} (página {figure.page}, bbox [ymin={ymin}, "
+                    f"  - {figure.id} (page {figure.page}, bbox [ymin={ymin}, "
                     f"xmin={xmin}, ymax={ymax}, xmax={xmax}])"
                 )
         if hints:
-            lines.append(f"\nContexto adicional del revisor: {hints}")
+            lines.append(f"\nAdditional context from the reviewer: {hints}")
         lines.append(
-            "\nDevuelve la lista de preguntas estructuradas, una por pregunta, "
-            "incluyendo statement_raw (TeX), question_type, choices, notation_notes, "
-            "course, topic, subtopic, difficulty y prerequisites."
+            "\nReturn the list of structured questions, one per question, "
+            "including statement_raw (TeX), question_type, choices, notation_notes, "
+            "course, topic, subtopic, difficulty and prerequisites."
         )
         return "\n".join(lines)
 
@@ -586,34 +582,34 @@ class Structurer:
         current: EnrichedQuestion,
         hints: str | None,
     ) -> str:
-        lines = ["Pregunta actual a corregir (Markdown/TeX):", "", current.statement_raw]
+        lines = ["Current question to fix (Markdown/TeX):", "", current.statement_raw]
         lines += [
             "",
-            "Clasificación curricular actual:",
+            "Current curricular classification:",
             f"- course: {current.course}",
             f"- topic: {current.topic}",
             f"- subtopic: {current.subtopic}",
             f"- difficulty: {current.difficulty}",
-            f"- prerequisites: {', '.join(current.prerequisites) or '(ninguno)'}",
+            f"- prerequisites: {', '.join(current.prerequisites) or '(none)'}",
         ]
         if current.choices:
-            lines += ["", "Alternativas actuales:"]
+            lines += ["", "Current choices:"]
             lines += [f"- {choice.id}: {choice.content_raw}" for choice in current.choices]
         if intermediate.figures:
-            lines += ["", "Figuras disponibles:"]
+            lines += ["", "Available figures:"]
             for figure in intermediate.figures:
                 ymin, xmin, ymax, xmax = figure.bbox
                 lines.append(
-                    f"  - {figure.id} (página {figure.page}, bbox [ymin={ymin}, "
+                    f"  - {figure.id} (page {figure.page}, bbox [ymin={ymin}, "
                     f"xmin={xmin}, ymax={ymax}, xmax={xmax}])"
                 )
         if hints:
-            lines += ["", f"Contexto correctivo del revisor: {hints}"]
+            lines += ["", f"Reviewer corrective context: {hints}"]
         lines.append(
-            "\nCorrige el enunciado aplicando el contexto correctivo y RE-INFIERE la "
-            "clasificación curricular completa. Devuelve UNA única pregunta con "
+            "\nFix the statement by applying the corrective context and RE-INFER the "
+            "full curricular classification. Return ONE single question with "
             "statement_raw (TeX), question_type, choices, notation_notes, course, topic, "
-            "subtopic, difficulty y prerequisites."
+            "subtopic, difficulty and prerequisites."
         )
         return "\n".join(lines)
 

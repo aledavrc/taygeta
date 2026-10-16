@@ -258,7 +258,7 @@ def test_detect_figures_ignores_rule_drawings() -> None:
 
 @pytest.mark.parametrize("prompt", [_STRUCTURING_SYSTEM_PROMPT, _REFINING_SYSTEM_PROMPT])
 def test_prompts_require_explicit_figures(prompt: str) -> None:
-    assert "NO declares fig:N" in prompt
+    assert "do NOT declare fig:N" in prompt
 
 
 def test_figure_hint_no_longer_orders_placeholders() -> None:
@@ -267,5 +267,5 @@ def test_figure_hint_no_longer_orders_placeholders() -> None:
     hint = IngestPipeline._figure_hint(
         [FigureReference(id="fig:1", page=0, bbox=[100, 100, 500, 500])], page_index=0
     )
-    assert "SOLO si el enunciado depende" in hint
-    assert "insertes ningún placeholder" in hint
+    assert "ONLY if the statement explicitly depends" in hint
+    assert "do not insert any placeholder" in hint

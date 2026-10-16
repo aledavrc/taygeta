@@ -122,4 +122,19 @@ CATALOG: dict[str, str] = {
         "{question_id}: figuras no presentes en el bucket: {figures}"
     ),
     "ui.persist.session_update_failed": "no se pudo marcar la sesión como confirmada: {error}",
+    # -- Generated exam documents -------------------------------------------
+    "exam.title": "Examen de práctica",
+    "exam.title_with_course": "Examen de práctica — {course}",
+    "exam.question_heading": "Pregunta {index}",
+    "exam.latex.babel_language": "spanish",
+    "exam.readme.latex": (
+        "Fuente del examen en LaTeX.\n\n"
+        "Compilar con: pdflatex main.tex\n\n"
+        "Las figuras utilizadas están en la carpeta assets/.\n"
+    ),
+    "exam.readme.typst": (
+        "Fuente del examen en Typst.\n\n"
+        "Compilar con: typst compile main.typ output.pdf\n\n"
+        "Las figuras utilizadas están en la carpeta assets/.\n"
+    ),
 }

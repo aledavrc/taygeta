@@ -60,9 +60,9 @@ class DuplicateJudgement(BaseModel):
     matching_index: int = Field(
         default=-1,
         ge=-1,
-        description="Índice (0-based) de la candidata duplicada, o -1 si no hay duplicado.",
+        description="Index (0-based) of the duplicate candidate, or -1 if there is none.",
     )
-    reason: str = Field(default="", description="Explicación breve en español.")
+    reason: str = Field(default="", description="Brief explanation in English.")
 
 
 @dataclass(slots=True)
@@ -75,18 +75,20 @@ class DedupOutcome:
     reason: str = ""
 
 
-_DUPLICATE_JUDGE_SYSTEM_PROMPT = """Eres un juez de deduplicación de preguntas de \
-exámenes científicos. Compara la pregunta nueva con las candidatas y determina si \
-es MATEMÁTICAMENTE la misma pregunta que alguna de ellas. Ignora diferencias menores \
-de notación (variables renombradas como X vs E, cambios de letra o símbolo), errores \
-de transcripción OCR y variaciones de redacción que no alteren el enunciado \
-matemático. NO resuelvas el ejercicio y NO evalúes respuestas correctas.
+_DUPLICATE_JUDGE_SYSTEM_PROMPT = """You are a duplicate-detection judge for \
+scientific exam questions. Compare the new question with the candidates and \
+determine whether it is MATHEMATICALLY the same question as any of them. Ignore \
+minor notation differences (renamed variables such as X vs E, letter or symbol \
+changes), OCR transcription errors and wording variations that do not alter the \
+mathematical statement. Do NOT solve the exercise and do NOT evaluate correct \
+answers.
 
-Devuelve:
-- is_duplicate: true SOLO si la pregunta nueva es la misma pregunta matemática que \
-alguna candidata.
-- matching_index: el índice (0-based) de la candidata duplicada, o -1 si no hay duplicado.
-- reason: breve explicación en español.
+Return:
+- is_duplicate: true ONLY if the new question is the same mathematical question as \
+some candidate.
+- matching_index: the index (0-based) of the duplicate candidate, or -1 if there \
+is no duplicate.
+- reason: brief explanation in English.
 """
 
 
@@ -296,22 +298,22 @@ class DeduplicationService:
     def _build_judge_user_message(
         new_question: EnrichedQuestion, candidates: list[EnrichedQuestion]
     ) -> str:
-        lines = ["Pregunta nueva a evaluar (Markdown/TeX):", "", new_question.statement_raw]
+        lines = ["New question to evaluate (Markdown/TeX):", "", new_question.statement_raw]
         if new_question.choices:
-            lines += ["", "Alternativas:"]
+            lines += ["", "Choices:"]
             lines += [f"- {choice.id}: {choice.content_raw}" for choice in new_question.choices]
-        lines += ["", "Candidatas ya existentes:"]
+        lines += ["", "Existing candidates:"]
         for index, candidate in enumerate(candidates):
             lines += [f"[{index}] {candidate.statement_raw}"]
             if candidate.choices:
                 alternatives = " | ".join(
                     f"{choice.id}: {choice.content_raw}" for choice in candidate.choices
                 )
-                lines.append(f"    Alternativas: {alternatives}")
+                lines.append(f"    Choices: {alternatives}")
         lines += [
             "",
-            "Decide si la pregunta nueva es MATEMÁTICAMENTE la misma que alguna de las "
-            "candidatas (ignorando diferencias menores de notación, OCR o redacción). "
-            "Devuelve is_duplicate y matching_index.",
+            "Decide whether the new question is MATHEMATICALLY the same as any of the "
+            "candidates (ignoring minor notation, OCR or wording differences). "
+            "Return is_duplicate and matching_index.",
         ]
         return "\n".join(lines)

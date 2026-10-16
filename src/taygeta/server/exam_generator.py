@@ -35,7 +35,7 @@ from taygeta.core.schema import EnrichedQuestion, FigureReference
 from taygeta.core.settings import Settings, get_settings
 from taygeta.core.urls import split_asset_reference
 from taygeta.domain.taxonomy import format_course_name
-from taygeta.i18n import DEFAULT_LOCALE
+from taygeta.i18n import DEFAULT_LOCALE, t
 from taygeta.server.db import Database
 from taygeta.server.object_storage import ObjectStorage
 
@@ -151,15 +151,16 @@ class ExamGenerator:
         self,
         questions: Sequence[EnrichedQuestion],
         *,
-        title: str = "Examen de práctica",
+        title: str | None = None,
         figure_paths: Mapping[str, str] | None = None,
         locale: str | None = None,
     ) -> str:
         """Assembles the Typst source of the exam from the statements."""
         paths = dict(figure_paths or self.figure_paths_map(questions))
-        lines = [f"= {title}", ""]
+        resolved_title = title or t("exam.title", locale=locale)
+        lines = [f"= {resolved_title}", ""]
         for index, question in enumerate(questions, start=1):
-            lines.append(f"== Pregunta {index}")
+            lines.append(f"== {t('exam.question_heading', index=index, locale=locale)}")
             statement = self.localized_statement(question, locale)
             lines.append(transpiler.markdown_to_typst(statement, figure_paths=paths).rstrip())
             lines.append("")
@@ -169,24 +170,27 @@ class ExamGenerator:
         self,
         questions: Sequence[EnrichedQuestion],
         *,
-        title: str = "Examen de práctica",
+        title: str | None = None,
         figure_paths: Mapping[str, str] | None = None,
         locale: str | None = None,
     ) -> str:
         """Assembles the LaTeX source of the exam using ``\\includegraphics``."""
         paths = dict(figure_paths or self.figure_paths_map(questions))
+        resolved_title = title or t("exam.title", locale=locale)
+        babel = t("exam.latex.babel_language", locale=locale)
         lines = [
             "\\documentclass{article}",
             "\\usepackage[utf8]{inputenc}",
             "\\usepackage{graphicx}",
             "\\usepackage{amsmath,amssymb}",
-            "\\usepackage[spanish]{babel}",
+            f"\\usepackage[{babel}]{{babel}}",
             "\\begin{document}",
-            f"\\title{{{title}}}",
+            f"\\title{{{resolved_title}}}",
             "\\maketitle",
         ]
         for index, question in enumerate(questions, start=1):
-            lines.append(f"\\section*{{Pregunta {index}}}")
+            heading = t("exam.question_heading", index=index, locale=locale)
+            lines.append(f"\\section*{{{heading}}}")
             statement = self.localized_statement(question, locale)
             lines.append(transpiler.markdown_to_latex(statement, figure_paths=paths).rstrip())
         lines.append("\\end{document}")
@@ -272,9 +276,9 @@ class ExamGenerator:
             course_name = self.database.get_course_name(
                 course, locale=active_locale
             ) or format_course_name(course, locale=active_locale)
-            resolved_title = f"Examen de práctica — {course_name}"
+            resolved_title = t("exam.title_with_course", course=course_name, locale=active_locale)
         else:
-            resolved_title = "Examen de práctica"
+            resolved_title = t("exam.title", locale=active_locale)
         try:
             typst = self.build_exam_typst(
                 questions, title=resolved_title, figure_paths=figure_paths, locale=locale
@@ -283,6 +287,7 @@ class ExamGenerator:
             manifest = {
                 "exam_id": identifier,
                 "title": resolved_title,
+                "locale": active_locale,
                 "figure_paths": figure_paths,
                 "questions": [question.model_dump(mode="json") for question in questions],
             }
@@ -362,36 +367,28 @@ class ExamGenerator:
             raise ExamGenerationError(f"no exam exists with id {exam_id!r}")
 
         manifest = json.loads(manifest_path.read_text())
-        zip_path = downloads / f"fuente_examen_{exam_id}.zip"
+        locale = manifest.get("locale") or None
+        zip_path = downloads / f"exam_source_{exam_id}.zip"
         with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as archive:
             if format == "latex":
-                archive.writestr("main.tex", self._manifest_to_latex(manifest))
+                archive.writestr("main.tex", self._manifest_to_latex(manifest, locale=locale))
             else:
                 archive.write(source_dir / "main.typ", "main.typ")
             for asset in sorted((source_dir / "assets").glob("*")):
                 if asset.is_file():
                     archive.write(asset, f"assets/{asset.name}")
-            archive.writestr("README.txt", self._readme(format))
+            archive.writestr("README.txt", self._readme(format, locale=locale))
         return zip_path
 
-    def _manifest_to_latex(self, manifest: dict[str, Any]) -> str:
+    def _manifest_to_latex(self, manifest: dict[str, Any], *, locale: str | None = None) -> str:
         questions = [EnrichedQuestion.model_validate(q) for q in manifest["questions"]]
         return self.build_exam_latex(
             questions,
-            title=manifest.get("title", "Examen de práctica"),
+            title=manifest.get("title") or t("exam.title", locale=locale),
             figure_paths=manifest.get("figure_paths", {}),
+            locale=locale,
         )
 
     @staticmethod
-    def _readme(format: str) -> str:
-        if format == "latex":
-            return (
-                "Fuente del examen en LaTeX.\n\n"
-                "Compilar con: pdflatex main.tex\n\n"
-                "Las figuras utilizadas están en la carpeta assets/.\n"
-            )
-        return (
-            "Fuente del examen en Typst.\n\n"
-            "Compilar con: typst compile main.typ output.pdf\n\n"
-            "Las figuras utilizadas están en la carpeta assets/.\n"
-        )
+    def _readme(format: str, *, locale: str | None = None) -> str:
+        return t(f"exam.readme.{format}", locale=locale)

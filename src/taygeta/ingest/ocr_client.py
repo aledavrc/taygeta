@@ -56,30 +56,29 @@ DEFAULT_MAX_TOKENS = 4096
 #: URL markers accepted directly as image input.
 _URL_PREFIXES = ("http://", "https://", "data:")
 
-OCR_SYSTEM_PROMPT = """Eres un transcriptor OCR de documentos científicos.
+OCR_SYSTEM_PROMPT = """You are an OCR transcriber of scientific documents.
 
-Tu única tarea es transcribir FIELMENTE el contenido visible de las imágenes a \
-Markdown, sin interpretar ni resolver nada. Reglas obligatorias:
+Your only task is to FAITHFULLY transcribe the visible content of the images to \
+Markdown, without interpreting or solving anything. Mandatory rules:
 
-1. Conserva la estructura de lectura, la numeración, el texto del enunciado y \
-las alternativas exactamente como aparecen.
-2. Escribe las expresiones matemáticas con delimitadores TeX estándar \
-OBLIGATORIOS: $...$ para inline y $$...$$ para display. PROHIBIDO emitir \
-\\[...\\], \\], \\(...\\), \\( o \\), así como sus variantes escapadas; si \
-aparecen en la imagen, transcríbelos siempre como $$...$$ (bloque) o $...$ \
-(inline) respectivamente.
-3. Conserva funciones por partes, matrices, sumatorias, subíndices, \
-superíndices, fracciones, límites, integrales y operadores definidos por el autor.
-4. Usa los entornos TeX adecuados cuando correspondan a la estructura visible: \
+1. Preserve the reading structure, the numbering, the statement text and the \
+choices exactly as they appear.
+2. Write mathematical expressions with the MANDATORY standard TeX delimiters: \
+$...$ for inline and $$...$$ for display. PROHIBITED to emit \\[...\\], \\], \
+\\(...\\), \\( or \\), as well as their escaped variants; if they appear in the \
+image, always transcribe them as $$...$$ (block) or $...$ (inline) respectively.
+3. Preserve piecewise functions, matrices, summations, subscripts, superscripts, \
+fractions, limits, integrals and author-defined operators.
+4. Use the appropriate TeX environments when they match the visible structure: \
 cases, pmatrix, aligned, substack.
-5. Mantén los placeholders de figura {{fig:N}} EXACTAMENTE en su posición dentro \
-del texto; no los muevas ni los reescribas.
-6. No inventes texto ilegible: escribe [ILEGIBLE] en su lugar y añade una línea \
-final "ADVERTENCIAS: ..." indicando qué no pudiste leer.
-7. NO resuelvas el ejercicio, NO añadas soluciones, respuestas correctas, \
-claves de respuesta, explicaciones ni interpretaciones matemáticas.
-8. Devuelve únicamente la transcripción en Markdown/TeX, sin comentarios sobre \
-tu proceso.
+5. Keep the figure placeholders {{fig:N}} EXACTLY in their position within the \
+text; do not move or rewrite them.
+6. Do not invent illegible text: write [ILEGIBLE] in its place and add a final \
+line "WARNINGS: ..." indicating what you could not read.
+7. Do NOT solve the exercise, do NOT add solutions, correct answers, answer keys, \
+explanations or mathematical interpretations.
+8. Return only the transcription in Markdown/TeX, with no comments about your \
+process.
 """
 
 
@@ -333,19 +332,19 @@ class OCRClient:
         source_reference: str | None,
         images: Sequence[Any],
     ) -> str:
-        lines = ["Transcribe fielmente a Markdown el contenido visible de la(s) imagen(es)."]
+        lines = ["Faithfully transcribe the visible content of the image(s) to Markdown."]
         pages = self._collect_pages(images)
         if source_reference:
-            lines.append(f"Origen: {source_reference}")
+            lines.append(f"Source: {source_reference}")
         if pages:
-            lines.append("Páginas (índice físico basado en cero): " + ", ".join(map(str, pages)))
+            lines.append("Pages (zero-based physical index): " + ", ".join(map(str, pages)))
         if hints:
             lines.append(
-                "Contexto adicional del revisor (úsalo solo para desambiguar la lectura, "
-                f"nunca para inventar contenido): {hints}"
+                "Additional context from the reviewer (use it only to disambiguate the "
+                f"reading, never to invent content): {hints}"
             )
         lines.append(
-            "Recuerda: no resuelvas el ejercicio, no añadas soluciones ni respuestas correctas."
+            "Remember: do not solve the exercise, do not add solutions or correct answers."
         )
         return "\n".join(lines)
 

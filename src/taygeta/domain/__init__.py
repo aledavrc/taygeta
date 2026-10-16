@@ -1,4 +1,4 @@
-"""Dominio curricular de Taygeta: taxonomía canónica de cursos y prerrequisitos."""
+"""Taygeta curricular domain: canonical course and prerequisite taxonomy."""
 
 from __future__ import annotations
 

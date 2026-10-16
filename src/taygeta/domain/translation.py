@@ -1,10 +1,10 @@
-"""Copias traducidas por idioma de las preguntas confirmadas.
+"""Per-language translated copies of confirmed questions.
 
-Cada pregunta conserva su enunciado **canónico** (idioma original) en ``questions``;
-estas copias son derivadas y viven en ``question_translations``. Nunca contienen
-soluciones ni respuestas correctas, no participan en la deduplicación (el
-``canonical_hash`` se calcula solo sobre el enunciado original) y se validan con
-la heurística local antes de almacenarse.
+Each question keeps its **canonical** statement (original language) in
+``questions``; these copies are derived and live in ``question_translations``.
+They never contain solutions or correct answers, they do not participate in
+deduplication (``canonical_hash`` is computed only over the original statement)
+and they are validated with the local heuristic before being stored.
 """
 
 from __future__ import annotations
@@ -18,24 +18,24 @@ __all__ = ["QuestionTranslation"]
 
 
 class QuestionTranslation(BaseModel):
-    """Copia traducida (enunciado y alternativas) de una pregunta, por idioma."""
+    """Translated copy (statement and choices) of a question, per language."""
 
     model_config = ConfigDict(extra="forbid")
 
-    question_id: str = Field(..., min_length=1, description="Id de la pregunta original.")
-    locale: str = Field(..., description="Idioma destino (p. ej. ``es`` o ``en``).")
+    question_id: str = Field(..., min_length=1, description="Id of the original question.")
+    locale: str = Field(..., description="Target language (e.g. ``es`` or ``en``).")
     statement_raw: str = Field(
-        ..., min_length=1, description="Enunciado traducido en Markdown/TeX."
+        ..., min_length=1, description="Translated statement in Markdown/TeX."
     )
     choices: list[Choice] | None = Field(
-        default=None, description="Alternativas traducidas (mismos ids y orden que el original)."
+        default=None, description="Translated choices (same ids and order as the original)."
     )
-    source: str = Field(default="llm", description="Procedencia del nombre (llm/manual).")
-    created_at: str = Field(..., description="Fecha/hora de creación en ISO 8601.")
+    source: str = Field(default="llm", description="Origin of the name (llm/manual).")
+    created_at: str = Field(..., description="Creation date/time in ISO 8601.")
 
     @field_validator("locale")
     @classmethod
     def _validate_locale(cls, value: str) -> str:
         if not is_supported_locale(value):
-            raise ValueError(f"locale no soportado: {value!r}")
+            raise ValueError(f"unsupported locale: {value!r}")
         return value

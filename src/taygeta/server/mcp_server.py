@@ -36,6 +36,7 @@ from taygeta.core.schema import (
 from taygeta.core.settings import Settings, get_settings
 from taygeta.core.urls import build_public_url, build_relative_path, split_asset_reference
 from taygeta.domain.taxonomy import TaxonomyNames, filter_taxonomy_names
+from taygeta.i18n import is_supported_locale
 from taygeta.ingest.pipeline import IngestPipeline, StagingResult
 from taygeta.ingest.validator import STATUS_NEEDS_ATTENTION, STATUS_VALID
 from taygeta.server.db import Database
@@ -79,12 +80,20 @@ def _json(payload: Any) -> str:
     return json.dumps(payload, ensure_ascii=False, indent=2)
 
 
-def _public_question(question: EnrichedQuestion, settings: Settings) -> dict[str, Any]:
-    """Serializa una pregunta resolviendo las rutas de figuras a URLs públicas.
+def _public_question(
+    question: EnrichedQuestion,
+    settings: Settings,
+    database: Database | None = None,
+    *,
+    locale: str | None = None,
+) -> dict[str, Any]:
+    """Serializa una pregunta resolviendo figuras y adjuntando sus traducciones.
 
     Antes de enviar la información al frontend o al cliente MCP, cada ruta
     relativa de figura (``/buckets/{bucket}/{key}``) se convierte en su URL
-    completa concatenando ``S3_PUBLIC_BASE_URL``.
+    completa concatenando ``S3_PUBLIC_BASE_URL``. Con ``database`` se adjuntan
+    las copias localizadas: por defecto ``statement_by_locale`` (todos los
+    idiomas) y, si se pide ``locale``, también el ``statement`` resuelto.
     """
     data = question.model_dump()
     for figure in data.get("figures", []):
@@ -92,6 +101,15 @@ def _public_question(question: EnrichedQuestion, settings: Settings) -> dict[str
         if reference:
             bucket, key = split_asset_reference(reference, default_bucket=settings.S3_BUCKET)
             figure["asset_path"] = build_public_url(build_relative_path(bucket, key), settings)
+    if database is not None:
+        by_locale = {
+            entry.locale: entry.statement_raw
+            for entry in database.list_question_translations(question.id)
+        }
+        data["statement_by_locale"] = by_locale
+        if is_supported_locale(locale):
+            data["locale"] = locale
+            data["statement"] = by_locale.get(locale, question.statement_raw)
     return data
 
 
@@ -381,11 +399,18 @@ def search_questions(
     topic: str = "",
     difficulty: int = 0,
     limit: int = 20,
+    locale: str = "",
 ) -> str:
-    """Recupera preguntas reales por curso, tema y dificultad (sin soluciones)."""
+    """Recupera preguntas reales por curso, tema y dificultad (sin soluciones).
+
+    Por defecto cada pregunta incluye ``statement_by_locale`` con todas las copias
+    localizadas; con ``locale`` (``es``/``en``) incluye además ``statement`` ya
+    resuelto para ese idioma.
+    """
     try:
         settings, database, _storage, _pipeline, _exams = _resources()
         limit = max(1, min(limit, _MAX_SEARCH_LIMIT))
+        active = locale if is_supported_locale(locale) else None
         questions = database.search_questions(
             course=course or None,
             topic=topic or None,
@@ -395,7 +420,10 @@ def search_questions(
         return _json(
             {
                 "count": len(questions),
-                "questions": [_public_question(q, settings) for q in questions],
+                "locale": active,
+                "questions": [
+                    _public_question(q, settings, database, locale=active) for q in questions
+                ],
             }
         )
     except Exception as exc:  # noqa: BLE001
@@ -403,11 +431,15 @@ def search_questions(
 
 
 @mcp.tool()
-def list_taxonomy() -> str:
-    """Consulta el catálogo de cursos, temas, subtemas y prerrequisitos."""
+def list_taxonomy(locale: str = "") -> str:
+    """Consulta el catálogo de cursos, temas, subtemas y prerrequisitos.
+
+    Por defecto incluye un mapa ``names`` con todos los idiomas; con ``locale``
+    (``es``/``en``) devuelve una forma plana con un único ``name`` por entrada.
+    """
     try:
         _settings, database, _storage, _pipeline, _exams = _resources()
-        return _json(database.list_taxonomy())
+        return _json(database.list_taxonomy(locale=locale or None))
     except Exception as exc:  # noqa: BLE001
         return _json({"status": "error", "message": str(exc)})
 
@@ -423,8 +455,13 @@ def generate_practice_exam(
     topics: list[str] | None = None,
     difficulty: int = 0,
     num_questions: int = 10,
+    locale: str = "",
 ) -> str:
-    """Genera y compila un examen de práctica en PDF con Typst."""
+    """Genera y compila un examen de práctica en PDF con Typst.
+
+    Con ``locale`` (``es``/``en``) se usa la copia traducida del enunciado cuando
+    existe y el nombre de curso localizado.
+    """
     try:
         _settings, _database, _storage, _pipeline, exams = _resources()
         result = exams.generate_exam(
@@ -432,6 +469,7 @@ def generate_practice_exam(
             topics=topics or None,
             difficulty=difficulty if difficulty >= 1 else None,
             num_questions=num_questions,
+            locale=locale or None,
         )
         return _json(result.summary())
     except Exception as exc:  # noqa: BLE001

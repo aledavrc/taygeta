@@ -31,7 +31,7 @@ from taygeta.core.schema import compute_canonical_hash, utc_now_iso
 from taygeta.core.settings import Settings, get_settings
 from taygeta.domain.taxonomy import TaxonomyNames
 from taygeta.domain.translation import QuestionTranslation
-from taygeta.i18n import DEFAULT_LOCALE, SUPPORTED_LOCALES, title_case_slug
+from taygeta.i18n import DEFAULT_LOCALE, SUPPORTED_LOCALES, is_supported_locale, title_case_slug
 from taygeta.server.taxonomy_seed import SEED_LABELS
 
 if TYPE_CHECKING:
@@ -840,12 +840,14 @@ class Database:
             ).fetchall()
         return [dict(row) for row in rows]
 
-    def list_taxonomy(self) -> dict[str, Any]:
-        """Catálogo de taxonomía con nombres localizados por idioma soportado.
+    def list_taxonomy(self, *, locale: str | None = None) -> dict[str, Any]:
+        """Catálogo de taxonomía, con nombres localizados.
 
-        Cada entrada incluye un mapa ``names`` (``{locale: label}``); los temas y
-        subtemas se resuelven en el contexto de su curso (``parent_slug``). Los
-        labels proceden de ``taxonomy_labels`` y caen a ``title_case_slug``.
+        Por defecto cada entrada incluye un mapa ``names`` (``{locale: label}``)
+        con todos los idiomas soportados; los temas y subtemas se resuelven en el
+        contexto de su curso (``parent_slug``). Con ``locale`` se devuelve una
+        forma plana y limpia con un único ``name`` por entrada. Los labels
+        proceden de ``taxonomy_labels`` y caen a ``title_case_slug``.
         """
         labels = self._label_map()
         with self.connect() as connection:
@@ -881,13 +883,42 @@ class Database:
         for prerequisite in prerequisites:
             description = prerequisite.get("description")
             names: dict[str, str] = {}
-            for locale in SUPPORTED_LOCALES:
-                label = labels.get(("prerequisite", "", prerequisite["slug"], locale))
-                if not label and locale == DEFAULT_LOCALE and description:
+            for locale_key in SUPPORTED_LOCALES:
+                label = labels.get(("prerequisite", "", prerequisite["slug"], locale_key))
+                if not label and locale_key == DEFAULT_LOCALE and description:
                     label = description
-                names[locale] = label or title_case_slug(prerequisite["slug"], locale=locale)
+                names[locale_key] = label or title_case_slug(
+                    prerequisite["slug"], locale=locale_key
+                )
             prerequisite["names"] = names
-        return {"courses": courses, "topics": topics, "prerequisites": prerequisites}
+        active = locale if is_supported_locale(locale) else None
+        if active is None:
+            return {"courses": courses, "topics": topics, "prerequisites": prerequisites}
+        return {
+            "locale": active,
+            "courses": [
+                {"slug": course["slug"], "name": course["names"][active]} for course in courses
+            ],
+            "topics": [
+                {
+                    "id": topic["id"],
+                    "course_slug": topic["course_slug"],
+                    "topic_slug": topic["topic_slug"],
+                    "subtopic_slug": topic.get("subtopic_slug"),
+                    "name": topic["names"][active],
+                    **(
+                        {"subtopic_name": topic["subtopic_names"][active]}
+                        if topic.get("subtopic_slug")
+                        else {}
+                    ),
+                }
+                for topic in topics
+            ],
+            "prerequisites": [
+                {"slug": prerequisite["slug"], "name": prerequisite["names"][active]}
+                for prerequisite in prerequisites
+            ],
+        }
 
     def _label_map(self) -> dict[tuple[str, str, str, str], str]:
         with self.connect() as connection:

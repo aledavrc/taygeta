@@ -1,19 +1,19 @@
-"""Validación en dos capas del pipeline de ingesta (sección 4.4).
+"""Two-layer validation of the ingestion pipeline (section 4.4).
 
-* **Capa 1 — heurística local** (:func:`validate_local`): comprobaciones baratas
-  (objetivo < 1 ms en documentos pequeños) que identifican errores probables sin
-  reescribir enunciados: longitud mínima, paridad de delimitadores matemáticos,
-  balance de llaves, concordancia placeholder/figure, validez de figuras y
-  páginas, campos obligatorios vacíos y alternativas duplicadas.
-* **Capa 2 — validación semántica remota** (:class:`SemanticValidator`): usa el
-  LLM remoto configurado con ``LLM_*`` (independiente del OCR) para validar
-  legibilidad, suficiencia, truncamientos, alternativas incompletas y
-  contradicciones obvias, *sin resolver* el ejercicio. Devuelve
+* **Layer 1 — local heuristic** (:func:`validate_local`): cheap checks (target <
+  1 ms on small documents) that identify likely errors without rewriting
+  statements: minimum length, parity of math delimiters, brace balance,
+  placeholder/figure agreement, validity of figures and pages, empty required
+  fields, and duplicate choices.
+* **Layer 2 — remote semantic validation** (:class:`SemanticValidator`): uses
+  the remote LLM configured with ``LLM_*`` (independent of the OCR) to validate
+  legibility, sufficiency, truncations, incomplete choices, and obvious
+  contradictions, *without solving* the exercise. Returns
   :class:`LogicalValidationResult`.
 
-Los objetos que fallan cualquier validación quedan en staging con estado
-``NEEDS_ATTENTION`` y un motivo técnico; los que pasan pueden marcarse ``VALID``
-pero no se guardan definitivamente hasta la confirmación humana.
+Objects that fail any validation stay in staging with status
+``NEEDS_ATTENTION`` and a technical reason; those that pass may be marked
+``VALID`` but are not saved definitively until human confirmation.
 """
 
 from __future__ import annotations
@@ -48,15 +48,15 @@ __all__ = [
     "validate_translation",
 ]
 
-#: Estados de staging admitidos para las preguntas.
+#: Staging statuses allowed for questions.
 STATUS_VALID = "VALID"
 STATUS_NEEDS_ATTENTION = "NEEDS_ATTENTION"
 
-#: Niveles de severidad de una incidencia local.
+#: Severity levels of a local issue.
 SEVERITY_ERROR = "error"
 SEVERITY_WARNING = "warning"
 
-#: Longitud mínima por defecto del enunciado (sección 4.4).
+#: Default minimum statement length (section 4.4).
 MIN_STATEMENT_LENGTH = 20
 
 _PLACEHOLDER_RE = re.compile(PLACEHOLDER_PATTERN)
@@ -65,7 +65,7 @@ _ALLOWED_TYPES = {"multiple_choice", "open_ended", "true_false", "numerical"}
 
 @dataclass(frozen=True, slots=True)
 class LocalIssue:
-    """Incidencia detectada por la heurística local."""
+    """Issue detected by the local heuristic."""
 
     code: str
     message: str
@@ -74,7 +74,7 @@ class LocalIssue:
 
 @dataclass(slots=True)
 class LocalValidationResult:
-    """Resultado de la validación local (Capa 1)."""
+    """Result of the local validation (Layer 1)."""
 
     is_valid: bool
     issues: list[LocalIssue] = field(default_factory=list)
@@ -89,14 +89,14 @@ class LocalValidationResult:
         return [issue for issue in self.issues if issue.severity == SEVERITY_WARNING]
 
     def format_reasons(self) -> str:
-        """Une todas las incidencias en un motivo técnico legible."""
+        """Join all the issues into a readable technical reason."""
         if not self.issues:
             return ""
         return "; ".join(f"{issue.code}: {issue.message}" for issue in self.issues)
 
 
 # ---------------------------------------------------------------------------
-# Capa 1 — Heurística local
+# Layer 1 — Local heuristic
 # ---------------------------------------------------------------------------
 
 
@@ -105,8 +105,8 @@ def _check_min_length(statement: str, min_length: int) -> LocalIssue | None:
         return LocalIssue(
             code="statement_too_short",
             message=(
-                f"enunciado de {len(statement.strip())} caracteres (< {min_length}); "
-                "puede ser válido si es una expresión breve justificada"
+                f"statement of {len(statement.strip())} characters (< {min_length}); "
+                "it may be valid if it is a justified short expression"
             ),
             severity=SEVERITY_WARNING,
         )
@@ -114,7 +114,7 @@ def _check_min_length(statement: str, min_length: int) -> LocalIssue | None:
 
 
 def _scan_math_delimiters(text: str) -> str:
-    """Devuelve una descripción del desbalance de delimitadores matemáticos, o ''."""
+    """Return a description of the math delimiter imbalance, or ''."""
     display_open = False
     inline_open = False
     index = 0
@@ -134,9 +134,9 @@ def _scan_math_delimiters(text: str) -> str:
         index += 1
     problems: list[str] = []
     if display_open:
-        problems.append("delimitador de display $$ sin cerrar")
+        problems.append("unclosed display delimiter $$")
     if inline_open:
-        problems.append("delimitador inline $ sin cerrar")
+        problems.append("unclosed inline delimiter $")
     return "; ".join(problems)
 
 
@@ -156,7 +156,7 @@ def _check_braces(statement: str, choices_text: str) -> LocalIssue | None:
     while index < length:
         char = text[index]
         if char == "\\" and index + 1 < length:
-            # Saltar el carácter escapado (\{ \} \frac ...) para no confundir llaves.
+            # Skip the escaped character (\{ \} \frac ...) so as not to confuse braces.
             index += 2
             continue
         if char == "{":
@@ -167,7 +167,7 @@ def _check_braces(statement: str, choices_text: str) -> LocalIssue | None:
     if depth != 0:
         return LocalIssue(
             code="unbalanced_braces",
-            message=f"llaves {{}} desbalanceadas (saldo {depth:+d})",
+            message=f"unbalanced braces {{}} (balance {depth:+d})",
         )
     return None
 
@@ -183,9 +183,9 @@ def _check_placeholder_figure_match(
     if missing or unused:
         message = []
         if missing:
-            message.append("placeholders sin figura declarada: " + ", ".join(missing))
+            message.append("placeholders without a declared figure: " + ", ".join(missing))
         if unused:
-            message.append("figuras declaradas sin placeholder: " + ", ".join(unused))
+            message.append("figures declared without a placeholder: " + ", ".join(unused))
         return LocalIssue(code="placeholder_figure_mismatch", message="; ".join(message))
     return None
 
@@ -196,24 +196,24 @@ def _check_figure_references(question: QuestionRaw, max_pages: int | None) -> li
     for figure in question.figures:
         if figure.id in seen:
             issues.append(
-                LocalIssue(code="duplicate_figure_id", message=f"figura duplicada {figure.id}")
+                LocalIssue(code="duplicate_figure_id", message=f"duplicate figure {figure.id}")
             )
         seen.add(figure.id)
         if figure.page < 0:
             issues.append(
-                LocalIssue(code="invalid_figure_page", message=f"página negativa en {figure.id}")
+                LocalIssue(code="invalid_figure_page", message=f"negative page in {figure.id}")
             )
         if max_pages is not None and figure.page >= max_pages:
             issues.append(
                 LocalIssue(
                     code="figure_page_out_of_range",
-                    message=f"página {figure.page} de {figure.id} fuera de rango (< {max_pages})",
+                    message=f"page {figure.page} of {figure.id} out of range (< {max_pages})",
                 )
             )
         ymin, xmin, ymax, xmax = figure.bbox
         if not (0 <= ymin < ymax <= 1000 and 0 <= xmin < xmax <= 1000):
             issues.append(
-                LocalIssue(code="invalid_figure_bbox", message=f"BBox inválida en {figure.id}")
+                LocalIssue(code="invalid_figure_bbox", message=f"invalid BBox in {figure.id}")
             )
     return issues
 
@@ -221,12 +221,12 @@ def _check_figure_references(question: QuestionRaw, max_pages: int | None) -> li
 def _check_required_fields(question: QuestionRaw) -> list[LocalIssue]:
     issues: list[LocalIssue] = []
     if not question.statement_raw.strip():
-        issues.append(LocalIssue(code="empty_statement", message="enunciado vacío"))
+        issues.append(LocalIssue(code="empty_statement", message="empty statement"))
     if question.question_type not in _ALLOWED_TYPES:
         issues.append(
             LocalIssue(
                 code="invalid_question_type",
-                message=f"tipo de pregunta inválido: {question.question_type!r}",
+                message=f"invalid question type: {question.question_type!r}",
             )
         )
     if question.question_type == "multiple_choice":
@@ -234,7 +234,7 @@ def _check_required_fields(question: QuestionRaw) -> list[LocalIssue]:
             issues.append(
                 LocalIssue(
                     code="missing_choices",
-                    message="multiple_choice requiere al menos dos alternativas",
+                    message="multiple_choice requires at least two choices",
                 )
             )
     if question.choices is not None:
@@ -243,7 +243,7 @@ def _check_required_fields(question: QuestionRaw) -> list[LocalIssue]:
                 issues.append(
                     LocalIssue(
                         code="empty_choice_content",
-                        message=f"contenido vacío en la alternativa {choice.id}",
+                        message=f"empty content in choice {choice.id}",
                     )
                 )
     return issues
@@ -256,7 +256,7 @@ def _check_duplicate_choices(question: QuestionRaw) -> LocalIssue | None:
     duplicates = sorted({choice_id for choice_id in ids if ids.count(choice_id) > 1})
     if duplicates:
         return LocalIssue(
-            code="duplicate_choices", message="alternativas duplicadas: " + ", ".join(duplicates)
+            code="duplicate_choices", message="duplicate choices: " + ", ".join(duplicates)
         )
     return None
 
@@ -267,12 +267,12 @@ def validate_local(
     min_statement_length: int = MIN_STATEMENT_LENGTH,
     max_pages: int | None = None,
 ) -> LocalValidationResult:
-    """Ejecuta la Capa 1 (heurística local) sobre una pregunta.
+    """Run Layer 1 (local heuristic) on a question.
 
     Args:
-        question: Pregunta ya validada por el esquema Pydantic.
-        min_statement_length: Longitud mínima del enunciado (0 para desactivar).
-        max_pages: Número total de páginas del documento para validar figuras.
+        question: Question already validated by the Pydantic schema.
+        min_statement_length: Minimum statement length (0 to disable).
+        max_pages: Total number of document pages to validate figures.
     """
     issues: list[LocalIssue] = []
     checks: dict[str, bool] = {}
@@ -307,7 +307,7 @@ def validate_local(
 
 
 def _extract_math_spans(text: str) -> list[str]:
-    """Extrae el contenido de todos los tramos matemáticos ``$...$`` y ``$$...$$``."""
+    """Extract the content of all math spans ``$...$`` and ``$$...$$``."""
     spans: list[str] = []
     index = 0
     length = len(text)
@@ -331,24 +331,24 @@ def _extract_math_spans(text: str) -> list[str]:
 
 
 def _check_math_preserved(source_text: str, translated_text: str) -> LocalIssue | None:
-    """Verifica que la traducción conserve intactas todas las expresiones TeX.
+    """Check that the translation keeps every TeX expression intact.
 
-    La traducción solo debe afectar a la prosa: cada expresión matemática
-    ``$...$`` / ``$$...$$`` debe permanecer byte a byte igual (el orden puede
-    variar). Un desajuste indica que el modelo alteró o tradujo las fórmulas.
+    The translation should only affect the prose: every math expression
+    ``$...$`` / ``$$...$$`` must remain byte-for-byte identical (the order may
+    vary). A mismatch indicates that the model altered or translated the formulas.
     """
     if Counter(_extract_math_spans(source_text)) == Counter(_extract_math_spans(translated_text)):
         return None
     return LocalIssue(
         code="math_not_preserved",
-        message="las expresiones matemáticas ($...$ / $$...$$) deben conservarse idénticas",
+        message="the math expressions ($...$ / $$...$$) must be preserved identically",
     )
 
 
 def _check_translation_choices(
     source: QuestionRaw, translation: QuestionTranslation
 ) -> LocalIssue | None:
-    """Verifica que las alternativas traducidas conserven ids y orden del original."""
+    """Check that the translated choices keep the ids and order of the original."""
     source_ids = [choice.id for choice in (source.choices or [])]
     translated_ids = [choice.id for choice in (translation.choices or [])]
     if source_ids == translated_ids:
@@ -356,8 +356,8 @@ def _check_translation_choices(
     return LocalIssue(
         code="translation_choices_mismatch",
         message=(
-            "las alternativas traducidas deben conservar los ids y el orden del "
-            f"original ({source_ids}); se recibió {translated_ids}"
+            "the translated choices must keep the ids and order of the "
+            f"original ({source_ids}); received {translated_ids}"
         ),
     )
 
@@ -368,11 +368,12 @@ def validate_translation(
     *,
     min_statement_length: int = MIN_STATEMENT_LENGTH,
 ) -> LocalValidationResult:
-    """Valida una copia traducida con la misma heurística local que el original.
+    """Validate a translated copy with the same local heuristic as the original.
 
-    Comprueba delimitadores y llaves balanceados, concordancia placeholder/figura
-    (contra las figuras del original), conservación exacta de las expresiones TeX
-    y alineación de alternativas. No detecta soluciones: el esquema ya las prohíbe.
+    It checks balanced delimiters and braces, placeholder/figure agreement
+    (against the original figures), exact preservation of the TeX expressions,
+    and choice alignment. It does not detect solutions: the schema already
+    forbids them.
     """
     issues: list[LocalIssue] = []
     checks: dict[str, bool] = {}
@@ -411,12 +412,12 @@ def validate_translation(
 
 
 # ---------------------------------------------------------------------------
-# Capa 2 — Validación semántica remota
+# Layer 2 — Remote semantic validation
 # ---------------------------------------------------------------------------
 
 
 class LogicalValidationResult(BaseModel):
-    """Resultado de la validación semántica remota (Capa 2)."""
+    """Result of the remote semantic validation (Layer 2)."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -441,11 +442,11 @@ indicando el problema. Si es válido, deja rejection_reason vacío.
 
 
 class RemoteValidationError(RuntimeError):
-    """Error controlado de la validación semántica remota."""
+    """Controlled error from the remote semantic validation."""
 
 
 class SemanticValidator:
-    """Capa 2: validación semántica mediante el LLM remoto (independiente del OCR)."""
+    """Layer 2: semantic validation through the remote LLM (independent of the OCR)."""
 
     def __init__(
         self,
@@ -455,12 +456,12 @@ class SemanticValidator:
         model: str | None = None,
         max_retries: int | None = None,
     ) -> None:
-        """Crea el validador semántico.
+        """Create the semantic validator.
 
         Args:
-            settings: Configuración a usar; por defecto la global.
-            client: Cliente ``instructor`` ya construido (inyectable en pruebas).
-            model: Sobrescribe ``LLM_MODEL``.
+            settings: Configuration to use; the global one by default.
+            client: Already-built ``instructor`` client (injectable in tests).
+            model: Overrides ``LLM_MODEL``.
         """
         self.settings = settings or get_settings()
         self._client = client
@@ -492,11 +493,11 @@ class SemanticValidator:
     def validate(
         self, question: QuestionRaw, *, hints: str | None = None
     ) -> LogicalValidationResult:
-        """Evalúa semánticamente una pregunta.
+        """Semantically evaluate a question.
 
         Raises:
-            RemoteValidationError: si el proveedor falla o la respuesta no se
-                puede validar.
+            RemoteValidationError: if the provider fails or the response cannot
+                be validated.
         """
         user_text = "Enunciado a revisar (Markdown/TeX):\n\n" + question.statement_raw
         if question.choices:
@@ -520,11 +521,11 @@ class SemanticValidator:
                 temperature=0.0,
                 max_retries=self._max_retries,
             )
-        except Exception as exc:  # noqa: BLE001 - errores de proveedor y de esquema
-            raise RemoteValidationError(f"fallo en la validación semántica remota: {exc}") from exc
+        except Exception as exc:  # noqa: BLE001 - provider and schema errors
+            raise RemoteValidationError(f"remote semantic validation failure: {exc}") from exc
 
         if not result.is_valid and not result.rejection_reason.strip():
-            result.rejection_reason = "motivo no especificado por el validador remoto"
+            result.rejection_reason = "reason not specified by the remote validator"
         if not result.is_valid:
             result.rejection_reason = result.rejection_reason.strip()
         return result

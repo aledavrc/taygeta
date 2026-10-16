@@ -1,22 +1,22 @@
-"""Preparación, rasterización y geometría de figuras (sección 4.1).
+"""Preparation, rasterization, and figure geometry (section 4.1).
 
-Responsabilidades:
+Responsibilities:
 
-* Abrir documentos PDF (y también imágenes PNG/JPG) con PyMuPDF (``fitz``).
-* Rasterizar las páginas a 300 DPI por defecto.
-* Desnormalizar las BBox de escala 0-1000 al tamaño real de la página aplicando
-  un padding preventivo del 1 % en los recortes automáticos; los recortes
-  manuales de la UI no añaden padding (recorte exacto).
-* Mantener el índice físico real de página basado en cero y conservar las
-  coordenadas necesarias para asociar cada figura con el enunciado exacto.
-* Detectar figuras y diagramas relevantes y asignar placeholders ``{{fig:N}}``
-  en orden de lectura.
-* Crear recortes en un directorio de trabajo temporal y, cuando se indique,
-  subir las figuras definitivas a SeaweedFS mediante ``object_storage``.
+* Open PDF documents (and also PNG/JPG images) with PyMuPDF (``fitz``).
+* Rasterize the pages at 300 DPI by default.
+* Denormalize the 0-1000 scale BBoxes to the real page size by applying a
+  preventive 1% padding on automatic crops; manual crops from the UI add no
+  padding (exact crop).
+* Keep the real zero-based physical page index and preserve the coordinates
+  needed to associate each figure with the exact statement.
+* Detect relevant figures and diagrams and assign ``{{fig:N}}`` placeholders
+  in reading order.
+* Create crops in a temporary working directory and, when requested, upload
+  the final figures to SeaweedFS through ``object_storage``.
 
-No se depende de rutas absolutas compartidas entre contenedores: los recortes
-se crean en directorios temporales locales y las figuras definitivas viven en
-S3 con una clave estable.
+No absolute paths shared between containers are relied upon: crops are created
+in local temporary directories and the final figures live in S3 under a stable
+key.
 """
 
 from __future__ import annotations
@@ -70,38 +70,38 @@ __all__ = [
     "working_directory",
 ]
 
-#: Resolución de rasterizado por defecto, exigida por la especificación.
+#: Default rasterization resolution, required by the specification.
 DEFAULT_DPI = 300
 
-#: Unidades de la BBox normalizada.
+#: Units of the normalized BBox.
 NORMALIZED_MAX = 1000
 
-#: Padding preventivo por defecto de los recortes automáticos (1 % del tamaño
-#: de página). Compensa las BBox imprecisas del detector/LLM.
+#: Default preventive padding for automatic crops (1% of the page size).
+#: Compensates for the imprecise BBoxes from the detector/LLM.
 DEFAULT_PADDING = 0.01
 
-#: Padding de los recortes manuales de la UI: sin margen, ajustados al recuadro.
+#: Padding for manual crops from the UI: no margin, fitted to the box.
 MANUAL_CROP_PADDING = 0.0
 
-#: Fracción máxima del área de página que puede ocupar una figura. Un candidato
-#: que cubre la página entera es, casi siempre, el fondo del documento o la
-#: imagen de un escaneo, no un diagrama: se descarta para no capturar la hoja
-#: completa como ``fig:N``.
+#: Maximum fraction of the page area a figure may occupy. A candidate that
+#: covers the whole page is, almost always, the document background or a scan
+#: image, not a diagram: it is discarded so that the full sheet is not captured
+#: as ``fig:N``.
 MAX_AREA_RATIO = 0.6
 
-#: Puntos por pulgada en el espacio de coordenadas de PDF.
+#: Points per inch in the PDF coordinate space.
 POINTS_PER_INCH = 72.0
 
-#: Extensiones de origen admitidas.
+#: Supported source extensions.
 SUPPORTED_SUFFIXES: frozenset[str] = frozenset({".pdf", ".png", ".jpg", ".jpeg"})
 
 
 class ImageExtractionError(RuntimeError):
-    """Error controlado durante la preparación o el recorte de figuras."""
+    """Controlled error during figure preparation or cropping."""
 
 
 class PixelRect(NamedTuple):
-    """Rectángulo en coordenadas de píxel con origen en la esquina superior izquierda."""
+    """Rectangle in pixel coordinates with the origin at the top-left corner."""
 
     x0: int
     y0: int
@@ -119,7 +119,7 @@ class PixelRect(NamedTuple):
 
 @dataclass(slots=True)
 class PageRaster:
-    """Página rasterizada a una resolución concreta."""
+    """Page rasterized to a specific resolution."""
 
     page_index: int
     width_px: int
@@ -132,7 +132,7 @@ class PageRaster:
         return (self.width_px, self.height_px)
 
     def save(self, path: str | Path) -> Path:
-        """Guarda la página rasterizada en disco y devuelve la ruta."""
+        """Save the rasterized page to disk and return the path."""
         destination = Path(path)
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_bytes(self.png_bytes)
@@ -141,7 +141,7 @@ class PageRaster:
 
 @dataclass(slots=True)
 class FigureCrop:
-    """Recorte de figura con sus coordenadas en varios espacios."""
+    """Figure crop with its coordinates in several spaces."""
 
     figure_id: str
     page_index: int
@@ -157,7 +157,7 @@ class FigureCrop:
 
 @dataclass(slots=True)
 class CarriedContext:
-    """Fragmento incompleto de una página N que sirve de contexto para la N+1."""
+    """Incomplete fragment from page N that serves as context for page N+1."""
 
     page_index: int
     text: str
@@ -166,34 +166,34 @@ class CarriedContext:
 
 
 # ---------------------------------------------------------------------------
-# Apertura y rasterización
+# Opening and rasterization
 # ---------------------------------------------------------------------------
 
 
 def is_supported_source(source: str | Path) -> bool:
-    """Indica si la extensión de ``source`` está admitida (PDF/PNG/JPG)."""
+    """Whether the extension of ``source`` is supported (PDF/PNG/JPG)."""
     return Path(source).suffix.lower() in SUPPORTED_SUFFIXES
 
 
 @contextmanager
 def open_document(source: str | Path) -> Iterator[fitz.Document]:
-    """Abre un PDF o imagen con PyMuPDF y garantiza su cierre.
+    """Open a PDF or image with PyMuPDF and guarantee that it is closed.
 
     Raises:
-        ImageExtractionError: si el archivo no existe, la extensión no está
-            admitida o PyMuPDF no puede abrirlo.
+        ImageExtractionError: if the file does not exist, the extension is not
+            supported, or PyMuPDF cannot open it.
     """
     path = Path(source)
     if not path.is_file():
-        raise ImageExtractionError(f"el archivo de origen no existe: {path}")
+        raise ImageExtractionError(f"source file does not exist: {path}")
     if not is_supported_source(path):
         raise ImageExtractionError(
-            f"extensión no admitida {path.suffix!r}; use una de {sorted(SUPPORTED_SUFFIXES)}"
+            f"unsupported extension {path.suffix!r}; use one of {sorted(SUPPORTED_SUFFIXES)}"
         )
     try:
         document = fitz.open(path)
-    except Exception as exc:  # PyMuPDF lanza tipos variados
-        raise ImageExtractionError(f"no se pudo abrir {path}: {exc}") from exc
+    except Exception as exc:  # PyMuPDF raises various types
+        raise ImageExtractionError(f"could not open {path}: {exc}") from exc
     try:
         yield document
     finally:
@@ -205,11 +205,11 @@ def _document_is_pdf(document: fitz.Document) -> bool:
 
 
 def _image_native_size(path: str | Path) -> tuple[int, int] | None:
-    """Devuelve el tamaño en píxeles nativo de un archivo de imagen, si se puede."""
+    """Return the native pixel size of an image file, if possible."""
     try:
         with Image.open(path) as image:
             return image.size
-    except Exception:  # noqa: BLE001 - si falla, se usa la métrica de PyMuPDF
+    except Exception:  # noqa: BLE001 - if it fails, the PyMuPDF metric is used
         return None
 
 
@@ -220,20 +220,20 @@ def rasterize_page(
     is_pdf: bool = True,
     zoom: float | None = None,
 ) -> PageRaster:
-    """Rasteriza una página y devuelve sus bytes PNG.
+    """Rasterize a page and return its PNG bytes.
 
-    Para PDF se usa ``zoom = dpi / 72`` (300 DPI por defecto). Para imágenes se
-    calibra el ``zoom`` de forma que se conserve la resolución nativa en píxeles.
+    For PDF, ``zoom = dpi / 72`` is used (300 DPI by default). For images, the
+    ``zoom`` is calibrated so that the native pixel resolution is preserved.
     """
     if dpi <= 0:
-        raise ImageExtractionError("el DPI debe ser positivo")
+        raise ImageExtractionError("DPI must be positive")
     if zoom is None:
         zoom = (dpi / POINTS_PER_INCH) if is_pdf else 1.0
     matrix = fitz.Matrix(zoom, zoom)
     try:
         pixmap = page.get_pixmap(matrix=matrix, alpha=False)
     except Exception as exc:
-        raise ImageExtractionError(f"no se pudo rasterizar la página {page.number}: {exc}") from exc
+        raise ImageExtractionError(f"could not rasterize page {page.number}: {exc}") from exc
     return PageRaster(
         page_index=page.number,
         width_px=pixmap.width,
@@ -244,7 +244,7 @@ def rasterize_page(
 
 
 def rasterize_document(source: str | Path, *, dpi: int = DEFAULT_DPI) -> list[PageRaster]:
-    """Rasteriza todas las páginas de un documento manteniendo el índice físico."""
+    """Rasterize all pages of a document keeping the physical index."""
     with open_document(source) as document:
         is_pdf = _document_is_pdf(document)
         native = None if is_pdf else _image_native_size(source)
@@ -252,7 +252,7 @@ def rasterize_document(source: str | Path, *, dpi: int = DEFAULT_DPI) -> list[Pa
             rasterize_page(page, dpi=dpi, is_pdf=is_pdf, zoom=_page_zoom(page, is_pdf, dpi, native))
             for page in document
         ]
-    logger.info("rasterizadas %d página(s) de %s", len(pages), source)
+    logger.info("rasterized %d page(s) from %s", len(pages), source)
     return pages
 
 
@@ -262,7 +262,7 @@ def _page_zoom(
     dpi: int,
     native_size: tuple[int, int] | None,
 ) -> float:
-    """Calcula el factor de escala para rasterizar una página sin perder detalle."""
+    """Compute the scale factor to rasterize a page without losing detail."""
     if is_pdf:
         return dpi / POINTS_PER_INCH
     if native_size and page.rect.width > 0:
@@ -271,7 +271,7 @@ def _page_zoom(
 
 
 # ---------------------------------------------------------------------------
-# Geometría: normalización y desnormalización
+# Geometry: normalization and denormalization
 # ---------------------------------------------------------------------------
 
 
@@ -284,22 +284,22 @@ def denormalize_bbox(
     clamp: bool = True,
     as_int: bool = False,
 ) -> tuple[float, float, float, float]:
-    """Convierte una BBox normalizada 0-1000 a coordenadas reales de página.
+    """Convert a normalized 0-1000 BBox to real page coordinates.
 
-    La BBox tiene formato ``[ymin, xmin, ymax, xmax]``. ``page_width`` y
-    ``page_height`` se expresan en la unidad destino (puntos de página). Se
-    aplica un padding preventivo (por defecto el 1 % del tamaño de página) en
-    los cuatro lados y, opcionalmente, se recorta al área de la página.
+    The BBox has the format ``[ymin, xmin, ymax, xmax]``. ``page_width`` and
+    ``page_height`` are expressed in the target unit (page points). A preventive
+    padding is applied (1% of the page size by default) on all four sides and,
+    optionally, the result is clamped to the page area.
 
     Returns:
-        Tupla ``(x0, y0, x1, y1)`` en la unidad de página.
+        Tuple ``(x0, y0, x1, y1)`` in the page unit.
     """
     if len(bbox) != 4:
-        raise ImageExtractionError("la BBox debe tener cuatro valores [ymin, xmin, ymax, xmax]")
+        raise ImageExtractionError("BBox must have four values [ymin, xmin, ymax, xmax]")
     if page_width <= 0 or page_height <= 0:
-        raise ImageExtractionError("las dimensiones de página deben ser positivas")
+        raise ImageExtractionError("page dimensions must be positive")
     if padding < 0:
-        raise ImageExtractionError("el padding no puede ser negativo")
+        raise ImageExtractionError("padding cannot be negative")
 
     ymin, xmin, ymax, xmax = (float(value) for value in bbox)
     x0 = xmin / NORMALIZED_MAX * page_width
@@ -328,11 +328,11 @@ def normalize_bbox(
     page_width: float,
     page_height: float,
 ) -> list[int]:
-    """Convierte una BBox en coordenadas de página a escala normalizada 0-1000."""
+    """Convert a BBox in page coordinates to the 0-1000 normalized scale."""
     if len(bbox) != 4:
-        raise ImageExtractionError("la BBox debe tener cuatro valores")
+        raise ImageExtractionError("BBox must have four values")
     if page_width <= 0 or page_height <= 0:
-        raise ImageExtractionError("las dimensiones de página deben ser positivas")
+        raise ImageExtractionError("page dimensions must be positive")
     x0, y0, x1, y1 = (float(value) for value in bbox)
     ymin = round(y0 / page_height * NORMALIZED_MAX)
     xmin = round(x0 / page_width * NORMALIZED_MAX)
@@ -351,7 +351,7 @@ def _rects_touch(a: fitz.Rect, b: fitz.Rect, gap: float) -> bool:
 
 
 def _merge_rects(rects: list[fitz.Rect], gap: float) -> list[fitz.Rect]:
-    """Une rectángulos que se solapan o quedan a menos de ``gap`` entre sí."""
+    """Merge rectangles that overlap or are closer than ``gap`` to each other."""
     pending = list(rects)
     merged: list[fitz.Rect] = []
     while pending:
@@ -372,17 +372,17 @@ def _merge_rects(rects: list[fitz.Rect], gap: float) -> list[fitz.Rect]:
 
 
 # ---------------------------------------------------------------------------
-# Detección de figuras y placeholders
+# Figure detection and placeholders
 # ---------------------------------------------------------------------------
 
 
 def _is_rule_like(rect: fitz.Rect, page_rect: fitz.Rect) -> bool:
-    """Indica si un candidato parece una regla/línea decorativa y no una figura.
+    """Whether a candidate looks like a decorative rule/line and not a figure.
 
-    Las subrayados, tablas interiores o filos de página son rectángulos
-    extremadamente finos y alargados que, fusionados, ensucian la detección:
-    se descartan cuando ocupan al menos la mitad de la dimensión mayor de la
-    página en una de sus dos direcciones.
+    Underlines, inner table lines, or page edges are extremely thin and
+    elongated rectangles that, when merged, pollute the detection: they are
+    discarded when they occupy at least half of the page's larger dimension in
+    one of its two directions.
     """
     if page_rect.width <= 0 or page_rect.height <= 0:
         return False
@@ -399,13 +399,13 @@ def detect_figures(
     max_area_ratio: float = MAX_AREA_RATIO,
     max_figures: int = 50,
 ) -> list[FigureReference]:
-    """Detecta figuras relevantes de una página y las devuelve normalizadas.
+    """Detect relevant figures on a page and return them normalized.
 
-    Combina las imágenes embebidas (``get_images``/``get_image_rects``) con los
-    dibujos vectoriales (``get_drawings``), descarta los elementos diminutos y
-    las líneas decorativas y filtra los candidatos que cubren casi toda la
-    página (fondos/escaneos), de modo que una hoja completa nunca se declare
-    como ``fig:N``. Asigna identificadores ``fig:N`` en orden de lectura.
+    Combines embedded images (``get_images``/``get_image_rects``) with vector
+    drawings (``get_drawings``), discards tiny elements and decorative lines,
+    and filters out candidates that cover almost the whole page
+    (backgrounds/scans), so that a full sheet is never declared as ``fig:N``.
+    Assigns ``fig:N`` identifiers in reading order.
     """
     page_rect = page.rect
     page_area = max(page_rect.width * page_rect.height, 1.0)
@@ -454,7 +454,7 @@ def detect_figures(
 
 
 def reading_order(figures: Sequence[FigureReference]) -> list[FigureReference]:
-    """Ordena las figuras por página y en flujo de lectura (arriba->abajo, izq->der)."""
+    """Sort figures by page and in reading flow (top->bottom, left->right)."""
     return sorted(
         figures,
         key=lambda figure: (
@@ -466,9 +466,9 @@ def reading_order(figures: Sequence[FigureReference]) -> list[FigureReference]:
 
 
 def assign_figure_ids(figures: Sequence[FigureReference]) -> list[FigureReference]:
-    """Renumera las figuras en orden de lectura con identificadores ``fig:N``.
+    """Renumber the figures in reading order with ``fig:N`` identifiers.
 
-    Mantiene el resto de campos (página, bbox, caption, asset_path) intactos.
+    Keeps the rest of the fields (page, bbox, caption, asset_path) intact.
     """
     ordered = reading_order(figures)
     return [
@@ -477,15 +477,15 @@ def assign_figure_ids(figures: Sequence[FigureReference]) -> list[FigureReferenc
 
 
 def placeholder_for(figure_id: str) -> str:
-    """Devuelve el placeholder de texto asociado a un identificador de figura."""
+    """Return the text placeholder associated with a figure identifier."""
     return "{{" + figure_id + "}}"
 
 
 def carry_context(previous_text: str | None, page_index: int) -> CarriedContext | None:
-    """Conserva el fragmento incompleto de la página ``page_index`` como contexto.
+    """Keep the incomplete fragment from page ``page_index`` as context.
 
-    Devuelve ``None`` si no hay texto previo. El fragmento permite al pase OCR y
-    al pase remoto interpretar ejercicios que continúan en la página siguiente.
+    Returns ``None`` if there is no previous text. The fragment lets the OCR
+    pass and the remote pass interpret exercises that continue on the next page.
     """
     if previous_text is None or not previous_text.strip():
         return None
@@ -500,7 +500,7 @@ def _placeholder_numbers(text: str) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# Recorte de figuras
+# Figure cropping
 # ---------------------------------------------------------------------------
 
 
@@ -534,22 +534,22 @@ def extract_and_save_figures(
     padding: float = DEFAULT_PADDING,
     image_format: str = "png",
 ) -> list[FigureCrop]:
-    """Recorta y guarda las figuras indicadas en ``output_dir``.
+    """Crop and save the given figures into ``output_dir``.
 
-    Desnormaliza cada BBox 0-1000 al tamaño real de la página añadiendo el
-    padding preventivo, rasteriza el recorte a ``dpi`` y escribe el archivo
-    temporal. Devuelve las coordenadas normalizadas, el rectángulo en puntos y
-    el rectángulo en píxeles para asociar la figura con el enunciado exacto.
+    Denormalizes each 0-1000 BBox to the real page size adding the preventive
+    padding, rasterizes the crop at ``dpi``, and writes the temporary file.
+    Returns the normalized coordinates, the rectangle in points, and the
+    rectangle in pixels to associate the figure with the exact statement.
 
     Args:
-        source: Ruta del PDF o imagen.
-        page_index: Índice físico de página basado en cero.
-        figures: Figuras con BBox normalizada (``FigureReference``, mapping o
-            secuencia ``[ymin, xmin, ymax, xmax]``).
-        output_dir: Directorio temporal donde escribir los recortes.
-        dpi: Resolución de rasterizado del recorte.
-        padding: Padding preventivo como fracción del tamaño de página.
-        image_format: Formato de imagen de salida (por defecto ``png``).
+        source: Path of the PDF or image.
+        page_index: Zero-based physical page index.
+        figures: Figures with a normalized BBox (``FigureReference``, mapping, or
+            sequence ``[ymin, xmin, ymax, xmax]``).
+        output_dir: Temporary directory where the crops are written.
+        dpi: Rasterization resolution of the crop.
+        padding: Preventive padding as a fraction of the page size.
+        image_format: Output image format (``png`` by default).
     """
     extension = f".{image_format.lstrip('.')}"
     output_path = Path(output_dir)
@@ -558,7 +558,7 @@ def extract_and_save_figures(
     with open_document(source) as document:
         if page_index < 0 or page_index >= document.page_count:
             raise ImageExtractionError(
-                f"índice de página {page_index} fuera de rango (0..{document.page_count - 1})"
+                f"page index {page_index} out of range (0..{document.page_count - 1})"
             )
         page = document.load_page(page_index)
         is_pdf = _document_is_pdf(document)
@@ -575,14 +575,14 @@ def extract_and_save_figures(
                 bbox, page_rect.width, page_rect.height, padding=padding
             )
             if x1 - x0 <= 0 or y1 - y0 <= 0:
-                logger.warning("se omite la figura %s: BBox degenerada %s", figure_id, bbox)
+                logger.warning("skipping figure %s: degenerate BBox %s", figure_id, bbox)
                 continue
             clip = fitz.Rect(x0, y0, x1, y1)
             try:
                 pixmap = page.get_pixmap(matrix=matrix, clip=clip, alpha=False)
             except Exception as exc:
                 raise ImageExtractionError(
-                    f"no se pudo recortar la figura {figure_id} en la página {page_index}: {exc}"
+                    f"could not crop figure {figure_id} on page {page_index}: {exc}"
                 ) from exc
 
             destination = output_path / _safe_filename(figure_id, extension)
@@ -610,9 +610,7 @@ def extract_and_save_figures(
                     },
                 )
             )
-            logger.debug(
-                "figura %s recortada en página %d -> %s", figure_id, page_index, destination
-            )
+            logger.debug("figure %s cropped on page %d -> %s", figure_id, page_index, destination)
     return crops
 
 
@@ -624,24 +622,24 @@ def crop_figure_bytes(
     dpi: int = DEFAULT_DPI,
     padding: float = MANUAL_CROP_PADDING,
 ) -> bytes:
-    """Recorta una región normalizada de una página y devuelve sus bytes PNG.
+    """Crop a normalized region from a page and return its PNG bytes.
 
-    Pensada para los recortes manuales de la UI: por defecto **no** añade
-    padding (``MANUAL_CROP_PADDING = 0``), de modo que el PNG coincide
-    exactamente con el recuadro seleccionado por el usuario. Comparte la
-    desnormalización y el rasterizado de :func:`extract_and_save_figures` (que
-    sí aplica el padding preventivo de las BBox automáticas), pero devuelve los
-    bytes en memoria: así la UI puede sobrescribir un asset en S3 sin tocar el
-    sistema de archivos ni dejar copias temporales.
+    Intended for manual crops from the UI: by default it adds **no** padding
+    (``MANUAL_CROP_PADDING = 0``), so the PNG matches exactly the box selected
+    by the user. It shares the denormalization and rasterization of
+    :func:`extract_and_save_figures` (which does apply the preventive padding of
+    automatic BBoxes), but returns the bytes in memory: this way the UI can
+    overwrite an asset in S3 without touching the filesystem or leaving
+    temporary copies.
 
     Raises:
-        ImageExtractionError: si la página está fuera de rango, la BBox es
-            degenerada o el recorte falla.
+        ImageExtractionError: if the page is out of range, the BBox is
+            degenerate, or the crop fails.
     """
     with open_document(source) as document:
         if page_index < 0 or page_index >= document.page_count:
             raise ImageExtractionError(
-                f"índice de página {page_index} fuera de rango (0..{document.page_count - 1})"
+                f"page index {page_index} out of range (0..{document.page_count - 1})"
             )
         page = document.load_page(page_index)
         is_pdf = _document_is_pdf(document)
@@ -650,14 +648,14 @@ def crop_figure_bytes(
         zoom = _page_zoom(page, is_pdf, dpi, native)
         x0, y0, x1, y1 = denormalize_bbox(bbox, page_rect.width, page_rect.height, padding=padding)
         if x1 - x0 <= 0 or y1 - y0 <= 0:
-            raise ImageExtractionError(f"BBox degenerada al recortar: {bbox}")
+            raise ImageExtractionError(f"degenerate BBox while cropping: {bbox}")
         try:
             pixmap = page.get_pixmap(
                 matrix=fitz.Matrix(zoom, zoom), clip=fitz.Rect(x0, y0, x1, y1), alpha=False
             )
-        except Exception as exc:  # noqa: BLE001 - PyMuPDF lanza tipos variados
+        except Exception as exc:  # noqa: BLE001 - PyMuPDF raises various types
             raise ImageExtractionError(
-                f"no se pudo recortar la figura de la página {page_index}: {exc}"
+                f"could not crop the figure from page {page_index}: {exc}"
             ) from exc
     return pixmap.tobytes("png")
 
@@ -670,12 +668,12 @@ def upload_crops(
     delete_local: bool = True,
     extension: str = ".png",
 ) -> list[FigureCrop]:
-    """Sube los recortes a SeaweedFS y anota su ruta relativa estable.
+    """Upload the crops to SeaweedFS and record their stable relative path.
 
-    Las figuras definitivas viven en S3 y se referencian mediante una ruta
-    relativa ``/buckets/{bucket}/{key}`` (forma canónica de almacenamiento,
-    independiente del endpoint). Cuando ``delete_local`` es ``True`` se elimina
-    la copia temporal para no guardar permanentemente una segunda copia local.
+    The final figures live in S3 and are referenced through a relative path
+    ``/buckets/{bucket}/{key}`` (the canonical storage form, independent of the
+    endpoint). When ``delete_local`` is ``True`` the temporary copy is removed
+    so a second local copy is not kept permanently.
     """
     for crop in crops:
         if crop.path is None:
@@ -692,15 +690,15 @@ def upload_crops(
 
 
 # ---------------------------------------------------------------------------
-# Directorio de trabajo temporal
+# Temporary working directory
 # ---------------------------------------------------------------------------
 
 
 @contextmanager
 def working_directory(prefix: str = "taygeta-ingest-") -> Iterator[Path]:
-    """Crea un directorio de trabajo temporal y lo elimina al salir.
+    """Create a temporary working directory and remove it on exit.
 
-    No toca la fuente subida por el usuario ni los objetos persistentes.
+    It does not touch the source uploaded by the user or the persistent objects.
     """
     path = Path(tempfile.mkdtemp(prefix=prefix))
     try:

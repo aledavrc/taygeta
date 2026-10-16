@@ -1,4 +1,4 @@
-"""Pipeline de ingesta híbrido de Taygeta: extracción, OCR, validación."""
+"""Taygeta hybrid ingestion pipeline: extraction, OCR, validation."""
 
 from __future__ import annotations
 

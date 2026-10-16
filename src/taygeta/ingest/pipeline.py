@@ -1,19 +1,20 @@
-"""Orquestación del pipeline híbrido de ingesta (secciones 4.1-4.4).
+"""Orchestration of the hybrid ingestion pipeline (sections 4.1-4.4).
 
-Flujo:
+Flow:
 
-1. **Preparación** (:mod:`image_extractor`): rasterización a 300 DPI, detección
-   de figuras y recorte/almacenamiento en SeaweedFS.
-2. **Pase 1 — OCR local** (:mod:`ocr_client`): transcripción fiel a Markdown/TeX.
-3. **Estructuración en un solo pase** (:mod:`taygeta.agents.structurer`): una
-   única llamada al LLM convierte el texto en objetos
-   :class:`~taygeta.core.schema.EnrichedQuestion` (TeX formateado + ``course``,
-   ``topic``, ``subtopic``, ``difficulty`` y ``prerequisites``) usando
-   ``instructor`` con Pydantic v2, sin resolver el ejercicio.
-4. **Validación en dos capas** (:mod:`validator`): heurística local + semántica
-   remota. El resultado se clasifica de forma estricta como ``VALID`` o
-   ``NEEDS_ATTENTION`` y queda en staging (nunca se guarda en la base definitiva
-   sin confirmación humana).
+1. **Preparation** (:mod:`image_extractor`): rasterization at 300 DPI, figure
+   detection, and cropping/storage in SeaweedFS.
+2. **Pass 1 — local OCR** (:mod:`ocr_client`): faithful transcription to
+   Markdown/TeX.
+3. **Single-pass structuring** (:mod:`taygeta.agents.structurer`): a single LLM
+   call converts the text into
+   :class:`~taygeta.core.schema.EnrichedQuestion` objects (formatted TeX +
+   ``course``, ``topic``, ``subtopic``, ``difficulty``, and ``prerequisites``)
+   using ``instructor`` with Pydantic v2, without solving the exercise.
+4. **Two-layer validation** (:mod:`validator`): local heuristic + remote
+   semantic. The result is strictly classified as ``VALID`` or
+   ``NEEDS_ATTENTION`` and stays in staging (it is never saved to the
+   definitive database without human confirmation).
 """
 
 from __future__ import annotations
@@ -64,13 +65,13 @@ __all__ = [
 
 
 # ---------------------------------------------------------------------------
-# Resultados de staging
+# Staging results
 # ---------------------------------------------------------------------------
 
 
 @dataclass(slots=True)
 class StagedQuestion:
-    """Pregunta enriquecida y clasificada tras la validación en dos capas."""
+    """Enriched and classified question after two-layer validation."""
 
     question: EnrichedQuestion | None
     status: Literal["VALID", "NEEDS_ATTENTION"]
@@ -82,7 +83,7 @@ class StagedQuestion:
 
 @dataclass(slots=True)
 class StagingResult:
-    """Resultado completo de una ingesta, listo para revisión humana."""
+    """Full result of an ingestion, ready for human review."""
 
     source_reference: str
     status: Literal["VALID", "NEEDS_ATTENTION"]
@@ -100,7 +101,7 @@ class StagingResult:
         return sum(1 for item in self.questions if item.status == STATUS_NEEDS_ATTENTION)
 
     def summary(self) -> dict[str, Any]:
-        """Resumen legible del resultado de la ingesta."""
+        """Human-readable summary of the ingestion result."""
         return {
             "source_reference": self.source_reference,
             "status": self.status,
@@ -118,7 +119,7 @@ class StagingResult:
 
 
 class IngestPipeline:
-    """Orquesta el doble pase de ingesta y la validación en dos capas."""
+    """Orchestrates the two-pass ingestion and the two-layer validation."""
 
     def __init__(
         self,
@@ -130,11 +131,11 @@ class IngestPipeline:
         storage: Any | None = None,
         database: Any | None = None,
     ) -> None:
-        """Crea el pipeline.
+        """Create the pipeline.
 
-        ``ocr``, ``structurer``, ``semantic_validator``, ``storage`` y
-        ``database`` son inyectables para pruebas unitarias; por defecto se
-        construyen a partir de la configuración global.
+        ``ocr``, ``structurer``, ``semantic_validator``, ``storage``, and
+        ``database`` are injectable for unit tests; by default they are built
+        from the global configuration.
         """
         self.settings = settings or get_settings()
         self.database = database
@@ -158,10 +159,10 @@ class IngestPipeline:
         session_id: str | None = None,
         upload_figures: bool = True,
     ) -> StagingResult:
-        """Ejecuta la ingesta completa y devuelve un resultado de staging.
+        """Run the full ingestion and return a staging result.
 
-        Los fallos de OCR, estructuración o validación se convierten en un
-        resultado ``NEEDS_ATTENTION`` explicable, nunca se pierden en silencio.
+        OCR, structuring, or validation failures become an explicable
+        ``NEEDS_ATTENTION`` result; they are never lost silently.
         """
         source = Path(source_path)
         source_reference = source.name
@@ -178,10 +179,10 @@ class IngestPipeline:
                         StagedQuestion(
                             question=None,
                             status=STATUS_NEEDS_ATTENTION,
-                            reasons=[f"no se pudo rasterizar el documento: {exc}"],
+                            reasons=[f"could not rasterize the document: {exc}"],
                         )
                     ],
-                    warnings=[f"rasterización fallida: {exc}"],
+                    warnings=[f"rasterization failed: {exc}"],
                 ),
                 persist_staging,
                 session_id,
@@ -201,11 +202,11 @@ class IngestPipeline:
                     source_reference=source_reference,
                 )
             except Exception as exc:  # noqa: BLE001
-                warnings.append(f"OCR de la página {raster.page_index} falló: {exc}")
-                raw_parts.append(f"<!-- página {raster.page_index} -->\n[ILEGIBLE]")
+                warnings.append(f"OCR of page {raster.page_index} failed: {exc}")
+                raw_parts.append(f"<!-- page {raster.page_index} -->\n[ILEGIBLE]")
                 continue
             warnings.extend(ocr_result.warnings)
-            raw_parts.append(f"<!-- página {raster.page_index} -->\n{ocr_result.text}")
+            raw_parts.append(f"<!-- page {raster.page_index} -->\n{ocr_result.text}")
 
         intermediate = TranscriptionIntermediate(
             source_reference=source_reference,
@@ -240,7 +241,7 @@ class IngestPipeline:
                     StagedQuestion(
                         question=None,
                         status=STATUS_NEEDS_ATTENTION,
-                        reasons=[item.error or "estructuración sin pregunta"],
+                        reasons=[item.error or "structuring produced no question"],
                     )
                 )
                 continue
@@ -271,10 +272,10 @@ class IngestPipeline:
         max_pages: int | None = None,
         taxonomy_names: Sequence[TaxonomyNames] | None = None,
     ) -> StagedQuestion:
-        """Ejecuta las dos capas de validación sobre una pregunta y la clasifica.
+        """Run the two validation layers on a question and classify it.
 
-        ``taxonomy_names`` transporta los nombres legibles (es/en) generados por
-        el LLM para que sobrevivan hasta la confirmación y se persistan entonces.
+        ``taxonomy_names`` carries the human-readable names (es/en) generated by
+        the LLM so that they survive until confirmation and are persisted then.
         """
         local = validate_local(question, max_pages=max_pages)
         reasons: list[str] = []
@@ -283,14 +284,14 @@ class IngestPipeline:
         try:
             logical = self.semantic.validate(question)
         except RemoteValidationError as exc:
-            reasons.append(f"validación semántica no disponible: {exc}")
+            reasons.append(f"semantic validation unavailable: {exc}")
         else:
             if not logical.is_valid:
-                reasons.append(logical.rejection_reason or "motivo no especificado")
+                reasons.append(logical.rejection_reason or "reason not specified")
 
         if not local.is_valid:
             reasons.append(
-                "validación local: " + "; ".join(issue.message for issue in local.errors)
+                "local validation: " + "; ".join(issue.message for issue in local.errors)
             )
 
         valid = local.is_valid and logical is not None and logical.is_valid
@@ -310,27 +311,27 @@ class IngestPipeline:
         *,
         hints: str | None = None,
     ) -> StagedQuestion:
-        """Reanaliza una pregunta con contexto correctivo y la revalida.
+        """Re-analyze a question with corrective context and revalidate it.
 
-        Reejecuta el pase de estructuración sobre UNA sola pregunta usando el mismo
-        esquema ``QuestionDraft``: el LLM devuelve, en la misma respuesta JSON, el
-        TeX corregido y la taxonomía re-inferida completa (``course``, ``topic``,
-        ``subtopic``, ``difficulty`` y ``prerequisites``). Después aplica las dos
-        capas de validación. No resuelve el ejercicio.
+        Re-runs the structuring pass on a SINGLE question using the same
+        ``QuestionDraft`` schema: the LLM returns, in the same JSON response,
+        the corrected TeX and the full re-inferred taxonomy (``course``,
+        ``topic``, ``subtopic``, ``difficulty``, and ``prerequisites``). Then it
+        applies the two validation layers. It does not solve the exercise.
         """
         refined = self.structurer.refine(intermediate, question, hints=hints)
         if refined.question is None:
             return StagedQuestion(
                 question=None,
                 status=STATUS_NEEDS_ATTENTION,
-                reasons=[refined.error or "el reanálisis no produjo una pregunta válida"],
+                reasons=[refined.error or "the re-analysis did not produce a valid question"],
             )
         max_pages = len(intermediate.pages) or None
         return self.validate_question(
             refined.question, max_pages=max_pages, taxonomy_names=refined.taxonomy_names
         )
 
-    # -- Internos -----------------------------------------------------------
+    # -- Internals ----------------------------------------------------------
     def _detect_and_store_figures(
         self, source: Path, upload: bool, warnings: list[str]
     ) -> list[FigureReference]:
@@ -340,7 +341,7 @@ class IngestPipeline:
                 for page in document:
                     detected.extend(detect_figures(page))
         except Exception as exc:  # noqa: BLE001
-            warnings.append(f"no se pudieron detectar figuras: {exc}")
+            warnings.append(f"could not detect figures: {exc}")
             return []
 
         if not detected:
@@ -372,7 +373,7 @@ class IngestPipeline:
                             )
                         )
         except Exception as exc:  # noqa: BLE001
-            warnings.append(f"no se pudieron almacenar las figuras definitivas: {exc}")
+            warnings.append(f"could not store the final figures: {exc}")
             return detected
         return figures
 
@@ -430,21 +431,21 @@ class IngestPipeline:
 
 
 def main(argv: list[str] | None = None) -> None:
-    """CLI mínima de ingesta (``taygeta-ingest``).
+    """Minimal ingestion CLI (``taygeta-ingest``).
 
-    Procesa un documento con el pipeline híbrido (doble pase + validación en dos
-    capas), persiste la sesión de staging e imprime un resumen JSON.
+    Processes a document with the hybrid pipeline (two passes + two-layer
+    validation), persists the staging session, and prints a JSON summary.
     """
     parser = argparse.ArgumentParser(
         prog="taygeta-ingest",
-        description="Ingesta híbrida de un documento PDF/PNG/JPG y resumen de staging.",
+        description="Hybrid ingestion of a PDF/PNG/JPG document and staging summary.",
     )
-    parser.add_argument("source", help="Ruta del documento a procesar")
-    parser.add_argument("--hint", default=None, help="Contexto correctivo para el análisis OCR/LLM")
+    parser.add_argument("source", help="Path of the document to process")
+    parser.add_argument("--hint", default=None, help="Corrective context for the OCR/LLM analysis")
     parser.add_argument(
         "--no-persist",
         action="store_true",
-        help="No crear la sesión de staging en la base de datos",
+        help="Do not create the staging session in the database",
     )
     args = parser.parse_args(argv)
 

@@ -1,18 +1,19 @@
-"""Pase 1: extracción visual local mediante OCR/Vision-LLM (sección 4.2).
+"""Pass 1: local visual extraction via OCR/Vision-LLM (section 4.2).
 
-El cliente se comunica con un servicio local que expone una API compatible con
-OpenAI, configurado exclusivamente con las variables ``OCR_BASE_URL``,
-``OCR_API_KEY`` y ``OCR_MODEL``. Su responsabilidad es *transcribir fielmente*
-el contenido visible a Markdown bruto con matemáticas TeX (``$...$`` y
-``$$...$$``), marcando los segmentos dudosos con ``[ILEGIBLE]``.
+The client communicates with a local service that exposes an OpenAI-compatible
+API, configured exclusively through the ``OCR_BASE_URL``, ``OCR_API_KEY``, and
+``OCR_MODEL`` variables. Its responsibility is to *faithfully transcribe* the
+visible content to raw Markdown with TeX math (``$...$`` and ``$$...$$``),
+marking doubtful segments with ``[ILEGIBLE]``.
 
-No clasifica curricularmente, no asigna dificultad, no infiere respuestas
-correctas, no resuelve ejercicios ni produce el objeto final ``QuestionRaw``.
+It does not classify curricularly, does not assign difficulty, does not infer
+correct answers, does not solve exercises, and does not produce the final
+``QuestionRaw`` object.
 
-La interfaz se mantiene independiente del motor: :class:`OCRBackend` define el
-contrato y :class:`OCRClient` es la implementación sobre el SDK oficial de
-``openai``. Otros motores (por ejemplo GOT-OCR2.0) pueden exponer el mismo
-contrato mediante un adaptador ligero.
+The interface is kept independent of the engine: :class:`OCRBackend` defines the
+contract and :class:`OCRClient` is the implementation on top of the official
+``openai`` SDK. Other engines (for example GOT-OCR2.0) can expose the same
+contract through a lightweight adapter.
 """
 
 from __future__ import annotations
@@ -43,16 +44,16 @@ __all__ = [
     "to_data_uri",
 ]
 
-#: Marcador explícito para segmentos que el OCR no puede leer con seguridad.
+#: Explicit marker for segments the OCR cannot read with confidence.
 ILLEGIBLE = ILLEGIBLE_MARKER
 
-#: Reintentos acotados por defecto ante errores transitorios del servicio.
+#: Default bounded retries for transient service errors.
 DEFAULT_MAX_RETRIES = 2
 
-#: Número máximo de tokens de la respuesta.
+#: Maximum number of tokens in the response.
 DEFAULT_MAX_TOKENS = 4096
 
-#: Marcadores de URL aceptados directamente como entrada de imagen.
+#: URL markers accepted directly as image input.
 _URL_PREFIXES = ("http://", "https://", "data:")
 
 OCR_SYSTEM_PROMPT = """Eres un transcriptor OCR de documentos científicos.
@@ -83,17 +84,17 @@ tu proceso.
 
 
 class OCRError(RuntimeError):
-    """Error controlado del cliente OCR local."""
+    """Controlled error from the local OCR client."""
 
 
 # ---------------------------------------------------------------------------
-# Tipos de entrada/salida
+# Input/output types
 # ---------------------------------------------------------------------------
 
 
 @dataclass(slots=True)
 class OCRImage:
-    """Imagen de entrada al OCR: bytes crudos o una URL/data URI accesible."""
+    """OCR input image: raw bytes or an accessible URL/data URI."""
 
     data: bytes | None = None
     url: str | None = None
@@ -102,12 +103,12 @@ class OCRImage:
 
     def __post_init__(self) -> None:
         if (self.data is None) == (self.url is None):
-            raise OCRError("OCRImage requiere exactamente uno de: data o url")
+            raise OCRError("OCRImage requires exactly one of: data or url")
 
 
 @dataclass(slots=True)
 class OCRResult:
-    """Transcripción cruda devuelta por el OCR local."""
+    """Raw transcription returned by the local OCR."""
 
     text: str
     model: str
@@ -117,18 +118,18 @@ class OCRResult:
 
     @property
     def has_illegible(self) -> bool:
-        """Indica si la transcripción contiene segmentos marcados como ilegibles."""
+        """Whether the transcription contains segments marked as illegible."""
         return ILLEGIBLE in self.text
 
     @property
     def illegible_count(self) -> int:
-        """Número de marcas ``[ILEGIBLE]`` presentes en la transcripción."""
+        """Number of ``[ILEGIBLE]`` marks present in the transcription."""
         return self.text.count(ILLEGIBLE)
 
 
 @runtime_checkable
 class OCRBackend(Protocol):
-    """Contrato mínimo e independiente del motor de OCR."""
+    """Minimal, engine-independent OCR contract."""
 
     def transcribe(
         self,
@@ -137,21 +138,21 @@ class OCRBackend(Protocol):
         hints: str | None = None,
         source_reference: str | None = None,
     ) -> OCRResult:
-        """Transcribe las imágenes a Markdown/TeX."""
+        """Transcribe the images to Markdown/TeX."""
         ...
 
     def health(self) -> bool:
-        """Comprueba que el servicio OCR está disponible."""
+        """Check that the OCR service is available."""
         ...
 
 
 # ---------------------------------------------------------------------------
-# Utilidades de imagen
+# Image utilities
 # ---------------------------------------------------------------------------
 
 
 def sniff_mime_type(data: bytes) -> str:
-    """Detecta el tipo MIME a partir de los bytes mágicos de la imagen."""
+    """Detect the MIME type from the image's magic bytes."""
     if data.startswith(b"\x89PNG\r\n\x1a\n"):
         return "image/png"
     if data.startswith(b"\xff\xd8\xff"):
@@ -166,19 +167,19 @@ def sniff_mime_type(data: bytes) -> str:
 
 
 def to_data_uri(data: bytes, mime_type: str | None = None) -> str:
-    """Codifica bytes como data URI, admitido por motores que no descargan URLs."""
+    """Encode bytes as a data URI, supported by engines that do not download URLs."""
     resolved = mime_type or sniff_mime_type(data)
     encoded = base64.b64encode(data).decode("ascii")
     return f"data:{resolved};base64,{encoded}"
 
 
 # ---------------------------------------------------------------------------
-# Cliente OCR (OpenAI-compatible)
+# OCR client (OpenAI-compatible)
 # ---------------------------------------------------------------------------
 
 
 class OCRClient:
-    """Cliente del servicio OCR local compatible con la API de OpenAI."""
+    """Client for the local OCR service compatible with the OpenAI API."""
 
     def __init__(
         self,
@@ -192,14 +193,14 @@ class OCRClient:
         max_retries: int = DEFAULT_MAX_RETRIES,
         max_tokens: int = DEFAULT_MAX_TOKENS,
     ) -> None:
-        """Crea el cliente OCR.
+        """Create the OCR client.
 
         Args:
-            settings: Configuración a usar; por defecto la global.
-            client: Cliente compatible con el SDK de OpenAI (inyectable en
-                pruebas unitarias). Si se omite, se construye uno real.
-            model / base_url / api_key / timeout: Sobrescriben los valores de
-                configuración, útil para seleccionar el motor sin tocar código.
+            settings: Configuration to use; the global one by default.
+            client: Client compatible with the OpenAI SDK (injectable in unit
+                tests). If omitted, a real one is built.
+            model / base_url / api_key / timeout: Override the configuration
+                values, useful for selecting the engine without touching code.
         """
         self.settings = settings or get_settings()
         self._client = client
@@ -210,26 +211,26 @@ class OCRClient:
         self._max_retries = max(0, max_retries)
         self._max_tokens = max_tokens
 
-    # -- Configuración ------------------------------------------------------
+    # -- Configuration ------------------------------------------------------
     @property
     def model(self) -> str:
-        """Identificador del modelo OCR configurado."""
+        """Identifier of the configured OCR model."""
         return self._model or self.settings.OCR_MODEL
 
     @property
     def base_url(self) -> str:
-        """Endpoint OpenAI-compatible del servicio OCR."""
+        """OpenAI-compatible endpoint of the OCR service."""
         return self._base_url
 
     @property
     def client(self) -> Any:
-        """Cliente ``openai`` construido de forma perezosa."""
+        """Lazily built ``openai`` client."""
         if self._client is None:
             self._client = self._build_client()
         return self._client
 
     def _build_client(self) -> OpenAI:
-        logger.info("cliente OCR -> base_url=%s model=%s", self._base_url, self.model)
+        logger.info("OCR client -> base_url=%s model=%s", self._base_url, self.model)
         return OpenAI(
             base_url=self._base_url,
             api_key=self._api_key,
@@ -237,19 +238,19 @@ class OCRClient:
             max_retries=self._max_retries,
         )
 
-    # -- Salud --------------------------------------------------------------
+    # -- Health -------------------------------------------------------------
     def health(self) -> bool:
-        """Comprueba el endpoint de salud del servicio OCR (lista de modelos)."""
+        """Check the OCR service health endpoint (list of models)."""
         try:
             self.client.models.list()
             return True
-        except Exception as exc:  # noqa: BLE001 - cualquier fallo implica no saludable
-            logger.warning("el servicio OCR no está disponible en %s: %s", self._base_url, exc)
+        except Exception as exc:  # noqa: BLE001 - any failure means unhealthy
+            logger.warning("the OCR service is not available at %s: %s", self._base_url, exc)
             return False
 
     is_healthy = health
 
-    # -- Transcripción ------------------------------------------------------
+    # -- Transcription ------------------------------------------------------
     def transcribe(
         self,
         images: Sequence[OCRImage | bytes | str | Path],
@@ -257,19 +258,19 @@ class OCRClient:
         hints: str | None = None,
         source_reference: str | None = None,
     ) -> OCRResult:
-        """Transcribe una o varias imágenes a Markdown con matemáticas TeX.
+        """Transcribe one or more images to Markdown with TeX math.
 
         Args:
-            images: Imágenes de entrada (bytes, rutas, URLs o :class:`OCRImage`).
-            hints: Contexto correctivo opcional aportado por el usuario.
-            source_reference: Referencia de origen para trazabilidad.
+            images: Input images (bytes, paths, URLs, or :class:`OCRImage`).
+            hints: Optional corrective context provided by the user.
+            source_reference: Source reference for traceability.
 
         Raises:
-            OCRError: si no hay imágenes, si el proveedor falla o la respuesta
-                no es interpretable.
+            OCRError: if there are no images, if the provider fails, or the
+                response cannot be interpreted.
         """
         if not images:
-            raise OCRError("se requiere al menos una imagen para transcribir")
+            raise OCRError("at least one image is required to transcribe")
 
         content: list[dict[str, Any]] = [
             {"type": "text", "text": self._build_instruction(hints, source_reference, images)}
@@ -288,9 +289,9 @@ class OCRClient:
                 max_tokens=self._max_tokens,
             )
         except OpenAIError as exc:
-            raise OCRError(f"fallo del servicio OCR ({self.base_url}): {exc}") from exc
-        except Exception as exc:  # cliente inyectado u otros motores
-            raise OCRError(f"error inesperado del servicio OCR: {exc}") from exc
+            raise OCRError(f"OCR service failure ({self.base_url}): {exc}") from exc
+        except Exception as exc:  # injected client or other engines
+            raise OCRError(f"unexpected OCR service error: {exc}") from exc
 
         text = self._extract_text(response)
         pages = self._collect_pages(images)
@@ -310,7 +311,7 @@ class OCRClient:
         hints: str | None = None,
         source_reference: str | None = None,
     ) -> OCRResult:
-        """Transcribe una única página o recorte."""
+        """Transcribe a single page or crop."""
         entry: OCRImage | bytes | str | Path
         if isinstance(image, (bytes, bytearray)):
             payload = bytes(image)
@@ -325,7 +326,7 @@ class OCRClient:
             entry = image
         return self.transcribe([entry], hints=hints, source_reference=source_reference)
 
-    # -- Internos -----------------------------------------------------------
+    # -- Internals ----------------------------------------------------------
     def _build_instruction(
         self,
         hints: str | None,
@@ -360,12 +361,12 @@ class OCRClient:
             if image.startswith(_URL_PREFIXES):
                 return OCRImage(url=image)
             return self._image_from_path(Path(image))
-        raise OCRError(f"tipo de imagen no admitido: {type(image).__name__}")
+        raise OCRError(f"unsupported image type: {type(image).__name__}")
 
     @staticmethod
     def _image_from_path(path: Path) -> OCRImage:
         if not path.is_file():
-            raise OCRError(f"el archivo de imagen no existe: {path}")
+            raise OCRError(f"image file does not exist: {path}")
         payload = path.read_bytes()
         return OCRImage(data=payload, mime_type=sniff_mime_type(payload))
 
@@ -374,7 +375,7 @@ class OCRClient:
         url = coerced.url
         if url is None:
             if coerced.data is None:
-                raise OCRError("la imagen no contiene datos ni URL")
+                raise OCRError("the image contains neither data nor URL")
             url = to_data_uri(coerced.data, coerced.mime_type)
         return {"type": "image_url", "image_url": {"url": url}}
 
@@ -392,9 +393,9 @@ class OCRClient:
         try:
             choices = response.choices
         except AttributeError as exc:
-            raise OCRError("respuesta del OCR sin campo 'choices'") from exc
+            raise OCRError("OCR response has no 'choices' field") from exc
         if not choices:
-            raise OCRError("la respuesta del OCR no contiene alternativas")
+            raise OCRError("the OCR response contains no choices")
         content = getattr(choices[0].message, "content", None)
         if isinstance(content, list):
             parts: list[str] = []
@@ -422,14 +423,13 @@ class OCRClient:
         count = text.count(ILLEGIBLE)
         if count:
             warnings.append(
-                f"se detectaron {count} segmento(s) marcados como {ILLEGIBLE}; "
-                "requieren revisión humana"
+                f"detected {count} segment(s) marked as {ILLEGIBLE}; they require human review"
             )
         if not text.strip():
-            warnings.append("la transcripción del OCR quedó vacía")
+            warnings.append("the OCR transcription is empty")
         return warnings
 
 
 def build_ocr_client(settings: Settings | None = None) -> OCRClient:
-    """Construye el cliente OCR con la configuración global ``OCR_*``."""
+    """Build the OCR client with the global ``OCR_*`` configuration."""
     return OCRClient(settings)

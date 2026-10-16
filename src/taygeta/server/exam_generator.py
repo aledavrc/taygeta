@@ -34,6 +34,7 @@ from taygeta.core.schema import EnrichedQuestion, FigureReference
 from taygeta.core.settings import Settings, get_settings
 from taygeta.core.urls import split_asset_reference
 from taygeta.domain.taxonomy import format_course_name
+from taygeta.i18n import DEFAULT_LOCALE
 from taygeta.server.db import Database
 from taygeta.server.object_storage import ObjectStorage
 
@@ -249,7 +250,9 @@ class ExamGenerator:
         if title:
             resolved_title = title
         elif course:
-            course_name = self.database.get_course_name(course) or format_course_name(course)
+            course_name = self.database.get_course_name(
+                course, locale=DEFAULT_LOCALE
+            ) or format_course_name(course, locale=DEFAULT_LOCALE)
             resolved_title = f"Examen de práctica — {course_name}"
         else:
             resolved_title = "Examen de práctica"

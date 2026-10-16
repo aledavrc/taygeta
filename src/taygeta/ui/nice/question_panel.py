@@ -20,6 +20,8 @@ El panel contiene:
   la numeración de páginas mostrada empieza en 1 (el índice interno es 0);
 * checkbox de aprobación que bloquea la persistencia si el enunciado deja
   placeholders colgantes.
+
+El texto visible se resuelve con :func:`taygeta.i18n.t` (catálogos ``es``/``en``).
 """
 
 from __future__ import annotations
@@ -37,6 +39,7 @@ from taygeta.core.schema import (
     TranscriptionIntermediate,
 )
 from taygeta.core.settings import Settings
+from taygeta.i18n import t
 from taygeta.ingest.pipeline import IngestPipeline, StagedQuestion
 from taygeta.ingest.validator import STATUS_NEEDS_ATTENTION, STATUS_VALID
 from taygeta.server.db import Database
@@ -190,7 +193,7 @@ class QuestionPanel:
         with (
             parent,
             ui.expansion(
-                f"Pregunta {self.index + 1} — {staged.status}",
+                t("ui.panel.header", number=self.index + 1, status=staged.status),
                 value=staged.status == STATUS_NEEDS_ATTENTION,
             ) as expansion,
         ):
@@ -199,41 +202,38 @@ class QuestionPanel:
             # forzar el recálculo al abrir (ver ``_on_expansion_change``).
             expansion.on_value_change(self._on_expansion_change)
             if staged.status == STATUS_VALID:
-                ui.label(
-                    "Validación superada (VALID). Revísala y apruébala para guardarla."
-                ).classes("text-emerald-700")
+                ui.label(t("ui.panel.valid")).classes("text-emerald-700")
             else:
-                ui.label("NEEDS_ATTENTION: " + "; ".join(staged.reasons)).classes("text-red-600")
+                ui.label(t("ui.panel.attention", reasons="; ".join(staged.reasons))).classes(
+                    "text-red-600"
+                )
             if staged.logical is not None and not staged.logical.is_valid:
-                ui.label(f"Motivo de rechazo semántico: {staged.logical.rejection_reason}").classes(
+                ui.label(t("ui.panel.rejection", reason=staged.logical.rejection_reason)).classes(
                     "text-red-600"
                 )
             if base is None:
-                ui.label("No hay enunciado estructurado para editar en esta pregunta.")
+                ui.label(t("ui.panel.no_statement"))
                 return
-            # Sistema de dos columnas 40 % / 60 %: a la izquierda el texto
-            # reconocido, la vista formateada y los metadatos (2/5); a la derecha
-            # las figuras y la página original (3/5), que necesitan más espacio.
             # Se usa un grid (no un row) porque ``ui.row`` es ``flex-wrap: wrap``
             # y las columnas con gap se apilarían al superar el 100% de ancho.
-            with ui.grid().classes("w-full gap-4 grid-cols-1 lg:grid-cols-5 items-start"):
-                with ui.column().classes("col-span-1 lg:col-span-2 gap-3 min-w-0"):
+            with ui.grid().classes("w-full gap-4 grid-cols-1 lg:grid-cols-2 items-start"):
+                with ui.column().classes("w-full col-span-1 gap-3 min-w-0"):
                     self._build_editor()
                     self._build_taxonomy()
                     self._build_advanced()
                     self.colgantes_label = ui.label("").classes("text-red-600 text-sm")
                     self.colgantes_label.set_visibility(False)
                     self.approve_box = ui.checkbox(
-                        "Aprobar y guardar esta pregunta", value=staged.status == STATUS_VALID
+                        t("ui.panel.approve"), value=staged.status == STATUS_VALID
                     )
                     self._sync_status()
-                with ui.column().classes("col-span-1 lg:col-span-3 gap-3 min-w-0"):
+                with ui.column().classes("w-full col-span-1 gap-3 min-w-0"):
                     with ui.tabs(
                         value="Página original",
                         on_change=lambda e: self._set_view(e.value),
                     ).classes("w-full"):
-                        ui.tab("Página original", label="Imagen original")
-                        ui.tab("Figuras", label="Figuras nuevas")
+                        ui.tab("Página original", label=t("ui.panel.tab.original"))
+                        ui.tab("Figuras", label=t("ui.panel.tab.figures"))
                     self.right_body = ui.column().classes("w-full gap-2")
                     self._set_view("Página original")
 
@@ -242,7 +242,7 @@ class QuestionPanel:
         if base is None:
             return
         self.statement_area = ui.textarea(
-            "Enunciado (Markdown/TeX)", value=base.statement_raw
+            t("ui.panel.statement"), value=base.statement_raw
         ).classes("w-full")
         self.statement_area.props("outlined autogrow")
         self.preview = ui.html(render_statement_html(base.statement_raw)).classes(
@@ -252,7 +252,7 @@ class QuestionPanel:
 
         self.qtype_select = ui.select(
             QUESTION_TYPES,
-            label="Tipo de pregunta",
+            label=t("ui.panel.qtype"),
             value=base.question_type,
             with_input=True,
         )
@@ -260,11 +260,11 @@ class QuestionPanel:
         self.choices_area = ui.column().classes("w-full gap-2")
         self._rebuild_choices()
         if base.notation_notes:
-            ui.label("Notas de notación: " + "; ".join(base.notation_notes)).classes(
+            ui.label(t("ui.panel.notation_notes", notes="; ".join(base.notation_notes))).classes(
                 "text-sm text-gray-600"
             )
         ui.separator()
-        ui.label("Metadatos").classes("font-semibold")
+        ui.label(t("ui.panel.metadata")).classes("font-semibold")
 
     def _rebuild_choices(self) -> None:
         """(Re)construye los editores de alternativas según el tipo seleccionado."""
@@ -279,10 +279,10 @@ class QuestionPanel:
             for choice_index, choice in enumerate(base_choices):
                 with ui.row().classes("w-full gap-2 items-start"):
                     choice_id = ui.input(
-                        f"Alternativa {choice_index + 1} — id", value=choice.id
+                        t("ui.panel.choice.id", number=choice_index + 1), value=choice.id
                     ).classes("w-32")
                     choice_text = ui.textarea(
-                        f"Alternativa {choice_index + 1} — contenido",
+                        t("ui.panel.choice.content", number=choice_index + 1),
                         value=choice.content_raw,
                     ).classes("flex-1")
                 self.choice_editors.append((choice_id, choice_text))
@@ -300,7 +300,7 @@ class QuestionPanel:
             value=value or None,
             with_input=True,
             new_value_mode="add-unique",
-        )
+        ).classes("w-full")
 
     def _topics_for(self, course: str) -> list[str]:
         if not course:
@@ -310,50 +310,46 @@ class QuestionPanel:
     def _build_taxonomy(self) -> None:
         defaults = _taxonomy_defaults(self.staged)
         courses = sorted({row["slug"] for row in self.database.list_courses()})
-        self.course_select = self._combobox("Curso", courses, defaults["course"]).tooltip(
-            "Curso del catálogo o escribe uno nuevo manualmente."
-        )
+        self.course_select = self._combobox(
+            t("ui.panel.course"), courses, defaults["course"]
+        ).tooltip(t("ui.panel.course.tooltip"))
         self.topic_select = self._combobox(
-            "Tema", self._topics_for(defaults["course"]), defaults["topic"]
-        ).tooltip("Temas del curso seleccionado o escribe uno nuevo manualmente.")
+            t("ui.panel.topic"), self._topics_for(defaults["course"]), defaults["topic"]
+        ).tooltip(t("ui.panel.topic.tooltip"))
         self.course_select.on_value_change(self._on_course_change)
 
-        self.subtopic_input = ui.input(
-            "Subtema (slug snake_case, opcional)", value=defaults["subtopic"] or ""
-        )
+        self.subtopic_input = ui.input(t("ui.panel.subtopic"), value=defaults["subtopic"] or "")
         with ui.row().classes("items-center gap-4"):
             self.difficulty_slider = ui.slider(
                 min=1, max=5, step=1, value=int(defaults["difficulty"])
             )
             ui.label().bind_text_from(
-                self.difficulty_slider, "value", backward=lambda v: f"Dificultad: {v}"
+                self.difficulty_slider,
+                "value",
+                backward=lambda v: t("ui.panel.difficulty", value=v),
             )
         catalog = sorted({row["slug"] for row in self.database.list_prerequisites()})
         prereq_default = list(dict.fromkeys(defaults["prerequisites"]))
         options = sorted({*catalog, *prereq_default})
         self.prereq_select = ui.select(
             options,
-            label="Prerrequisitos",
+            label=t("ui.panel.prerequisites"),
             value=prereq_default,
             multiple=True,
             with_input=True,
             new_value_mode="add-unique",
-        )
+        ).classes("w-full")
 
     def _build_advanced(self) -> None:
-        with ui.expansion("Opciones Avanzadas"):
-            self.hint_input = ui.input(
-                "Contexto correctivo (p. ej. «La condición ilegible es g(x) = ...»)"
-            ).classes("w-full")
+        with ui.expansion(t("ui.panel.advanced")).classes("w-full"):
+            self.hint_input = ui.input(t("ui.panel.hint")).classes("w-full")
             self._refine_error = ui.label("").classes("text-red-600 text-sm")
             self._refine_error.set_visibility(False)
             with ui.row().classes("items-center gap-2"):
-                ui.button("Reanalizar enunciado", on_click=self._refine)
+                ui.button(t("ui.panel.refine"), on_click=self._refine)
                 self._refine_spinner = ui.spinner(size="sm")
                 self._refine_spinner.set_visibility(False)
-            self.new_prereq_input = ui.input("Nuevos prerrequisitos (separados por coma)").classes(
-                "w-full"
-            )
+            self.new_prereq_input = ui.input(t("ui.panel.new_prereqs")).classes("w-full")
 
     # ------------------------------------------------------------------
     # Eventos del editor y taxonomía
@@ -415,9 +411,7 @@ class QuestionPanel:
             return
         if colgantes:
             self.colgantes_label.set_text(
-                "El enunciado referencia placeholders sin figura declarada: "
-                + ", ".join(sorted(colgantes))
-                + ". Elimina el placeholder o restaura la figura para poder aprobar."
+                t("ui.panel.dangling", placeholders=", ".join(sorted(colgantes)))
             )
             self.colgantes_label.set_visibility(True)
         else:
@@ -449,7 +443,7 @@ class QuestionPanel:
             return
         self.figures_area.clear()
         with self.figures_area:
-            ui.label("Figuras de la pregunta").classes("font-semibold")
+            ui.label(t("ui.panel.figures_title")).classes("font-semibold")
             for figure in self.qstate.figures:
                 figure_id = figure.get("id") or "fig:?"
                 page_index = int(figure.get("page", 0))
@@ -459,28 +453,40 @@ class QuestionPanel:
                         ui.image(image).classes("w-full rounded border")
                     else:
                         caption(
-                            f"{figure_id}: no se pudo cargar el recorte (página {page_index + 1})"
+                            t(
+                                "ui.panel.figure.load_failed",
+                                figure_id=figure_id,
+                                page=page_index + 1,
+                            )
                         )
-                    caption(f"{figure_id} — recorte (página {page_index + 1})")
+                    caption(
+                        t(
+                            "ui.panel.figure.caption",
+                            figure_id=figure_id,
+                            page=page_index + 1,
+                        )
+                    )
                     url = cache_busted_public_url(
                         figure.get("asset_path"), self.settings, seed=figure.get("bbox")
                     )
                     if url:
-                        ui.link(f"Abrir {figure_id} en el navegador", url, new_tab=True).classes(
-                            "text-xs"
-                        )
+                        ui.link(
+                            t("ui.panel.figure.open", figure_id=figure_id),
+                            url,
+                            new_tab=True,
+                        ).classes("text-xs")
                     ui.button(
-                        "Eliminar figura",
+                        t("ui.panel.figure.delete"),
                         on_click=lambda fid=figure_id: self._delete_figure(fid),
                     ).props("flat color=negative dense")
-                    with ui.expansion(f"Recortar manualmente — {figure_id}"):
+                    with ui.expansion(t("ui.panel.figure.recrop", figure_id=figure_id)):
                         self._render_recrop(figure_id, figure, page_index)
             self._render_add_area()
 
     def _render_recrop(self, figure_id: str, figure: dict[str, Any], page_index: int) -> None:
         result = page_pil(self.source_path, page_index)
         if result is None:
-            caption("No hay documento de origen para recortar esta figura.")
+            caption(t("ui.panel.figure.recrop_none"))
             return
         image, width, height = result
         pending: dict[str, Any] = {"bbox": None}
@@ -489,11 +495,11 @@ class QuestionPanel:
             width=width,
             height=height,
             on_confirm=lambda box: pending.update({"bbox": box}),
-            caption=f"Arrastra sobre la página {page_index + 1} para ajustar el recorte",
+            caption=t("ui.panel.figure.recrop_caption", page=page_index + 1),
             initial_box=self._initial_pixel_box(figure, width, height),
         )
         ui.button(
-            "Aplicar recorte",
+            t("ui.panel.figure.apply_crop"),
             on_click=self._apply_recrop(figure_id, width, height, pending),
         ).props("dense")
 
@@ -521,7 +527,7 @@ class QuestionPanel:
         async def handler() -> None:
             box = pending.get("bbox")
             if box is None:
-                ui.notify("Arrastra sobre la página para seleccionar la región", type="warning")
+                ui.notify(t("ui.panel.figure.select_region_warning"), type="warning")
                 return
             try:
                 new_bbox = pixel_box_to_normalized_bbox(box, int(width), int(height))
@@ -534,28 +540,34 @@ class QuestionPanel:
                     self.storage,
                 )
             except Exception as exc:  # noqa: BLE001 - se informa al usuario, no se oculta
-                ui.notify(f"No se pudo aplicar el recorte de {figure_id}: {exc}", type="negative")
+                ui.notify(
+                    t("ui.panel.figure.crop_failed", figure_id=figure_id, error=exc),
+                    type="negative",
+                )
                 return
             self.qstate.figures = figures
-            ui.notify(f"{figure_id} recortada y guardada.", type="positive")
+            ui.notify(t("ui.panel.figure.cropped", figure_id=figure_id), type="positive")
             self._render_figures()
 
         return handler
 
     def _render_add_area(self) -> None:
-        with ui.expansion("➕ Añadir nueva figura") as add_exp:
+        with ui.expansion(t("ui.panel.figure.add_expansion")) as add_exp:
             page_count = document_page_count(self.source_path)
             if page_count is None or page_count <= 0:
-                caption("No hay documento de origen para añadir figuras.")
+                caption(t("ui.panel.figure.no_source_add"))
                 return
             default_page = 0
             if self.qstate.figures:
                 default_page = min(int(self.qstate.figures[0].get("page", 0)), int(page_count) - 1)
             page_select = ui.select(
-                {index: f"Página {index + 1}" for index in range(int(page_count))},
+                {
+                    index: t("ui.panel.figure.page", number=index + 1)
+                    for index in range(int(page_count))
+                },
                 value=default_page,
-                label="Página original del documento",
-            )
+                label=t("ui.panel.figure.page_label"),
+            ).classes("w-full")
             body = ui.column().classes("w-full gap-2")
             pending: dict[str, Any] = {"bbox": None, "page": int(default_page)}
             dims: dict[str, int] = {}
@@ -566,7 +578,7 @@ class QuestionPanel:
                     page_index = int(page_select.value)
                     result = page_pil(self.source_path, page_index)
                     if result is None:
-                        caption("No se pudo cargar la página original para recortar.")
+                        caption(t("ui.panel.figure.page_failed"))
                         return
                     image, width, height = result
                     dims["width"], dims["height"] = width, height
@@ -578,11 +590,12 @@ class QuestionPanel:
                         width=width,
                         height=height,
                         on_confirm=lambda box: pending.update({"bbox": box}),
-                        caption="Arrastra y suelta para seleccionar la figura",
+                        caption=t("ui.cropper.select_figure"),
                     )
-                    ui.button("Añadir figura", on_click=self._add_figure(pending, dims)).props(
-                        "dense"
-                    )
+                    ui.button(
+                        t("ui.panel.figure.add_button"),
+                        on_click=self._add_figure(pending, dims),
+                    ).props("dense")
 
             page_select.on_value_change(lambda _e: show_cropper())
             # El cropper se dibuja al abrir la expansión (no en build time) para
@@ -593,7 +606,7 @@ class QuestionPanel:
         async def handler() -> None:
             box = pending.get("bbox")
             if box is None or self.statement_area is None:
-                ui.notify("Arrastra sobre la página para seleccionar la región", type="warning")
+                ui.notify(t("ui.panel.figure.select_region_warning"), type="warning")
                 return
             try:
                 new_bbox = pixel_box_to_normalized_bbox(box, dims["width"], dims["height"])
@@ -607,16 +620,13 @@ class QuestionPanel:
                     storage=self.storage,
                 )
             except Exception as exc:  # noqa: BLE001 - se informa al usuario, no se oculta
-                ui.notify(f"No se pudo añadir la figura: {exc}", type="negative")
+                ui.notify(t("ui.panel.figure.add_failed", error=exc), type="negative")
                 return
             self.qstate.figures = figures
             self.statement_area.value = statement
             self._render_preview(statement)
             self._sync_status()
-            ui.notify(
-                f"{figure_id} añadida; su placeholder quedó al final del enunciado.",
-                type="positive",
-            )
+            ui.notify(t("ui.panel.figure.added", figure_id=figure_id), type="positive")
             self._render_figures()
 
         return handler
@@ -629,7 +639,7 @@ class QuestionPanel:
                 self.qstate.figures, self.statement_area.value, figure_id
             )
         except Exception as exc:  # noqa: BLE001 - se informa al usuario, no se oculta
-            ui.notify(f"No se pudo eliminar la figura: {exc}", type="negative")
+            ui.notify(t("ui.panel.figure.delete_failed", error=exc), type="negative")
             return
         self.qstate.figures = figures
         for figure in removed:
@@ -645,7 +655,7 @@ class QuestionPanel:
 
     def _render_original_pages(self) -> None:
         if self.source_path is None:
-            caption("No hay documento de origen para mostrar.")
+            caption(t("ui.panel.original.none"))
             return
         pages = [0]
         if self.base is not None and self.base.figures:
@@ -654,9 +664,9 @@ class QuestionPanel:
             data = page_image_bytes(self.source_path, page_index)
             if data:
                 ui.image(Image.open(io.BytesIO(data))).classes("w-full rounded border")
-                caption(f"Página original {page_index + 1}")
+                caption(t("ui.panel.original.page", number=page_index + 1))
             else:
-                caption(f"No se pudo rasterizar la página {page_index + 1}.")
+                caption(t("ui.panel.original.page_failed", number=page_index + 1))
 
     # ------------------------------------------------------------------
     # Reanálisis del enunciado (refine)
@@ -686,7 +696,7 @@ class QuestionPanel:
             )
         except Exception as exc:  # noqa: BLE001 - se informa al panel, no se oculta
             if self._refine_error is not None:
-                self._refine_error.set_text(f"No se pudo reanalizar: {exc}")
+                self._refine_error.set_text(t("ui.panel.refine_failed", error=exc))
                 self._refine_error.set_visibility(True)
             return
         finally:

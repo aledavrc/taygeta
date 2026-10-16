@@ -35,6 +35,7 @@ from taygeta.core.schema import (
 )
 from taygeta.core.settings import get_settings
 from taygeta.core.urls import build_relative_path, split_asset_reference
+from taygeta.i18n import t
 from taygeta.ingest.image_extractor import (
     PageRaster,
     is_supported_source,
@@ -301,7 +302,7 @@ def _missing_figure_assets(question: EnrichedQuestion, storage: ObjectStorage | 
     missing: list[str] = []
     for figure in question.figures:
         if not figure.asset_path:
-            missing.append(f"{figure.id} (sin asset_path)")
+            missing.append(t("ui.persist.figure_missing_asset", figure_id=figure.id))
             continue
         if storage is None:
             continue
@@ -341,7 +342,11 @@ def persist_approved_questions(
             missing = _missing_figure_assets(question, storage)
             if missing:
                 result.errors.append(
-                    f"{question.id}: figuras no presentes en el bucket: {', '.join(missing)}"
+                    t(
+                        "ui.persist.figure_not_in_bucket",
+                        question_id=question.id,
+                        figures=", ".join(missing),
+                    )
                 )
                 continue
             database.add_prerequisites(list(question.prerequisites))
@@ -354,7 +359,7 @@ def persist_approved_questions(
         try:
             database.update_staging_session(session_id, status="CONFIRMED")
         except DatabaseError as exc:
-            result.errors.append(f"no se pudo marcar la sesión como confirmada: {exc}")
+            result.errors.append(t("ui.persist.session_update_failed", error=exc))
     return result
 
 

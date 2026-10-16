@@ -20,6 +20,8 @@ from typing import Literal
 from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from taygeta.i18n import SUPPORTED_LOCALES
+
 __all__ = ["Settings", "get_settings", "mask_secret"]
 
 
@@ -170,6 +172,15 @@ class Settings(BaseSettings):
         default="http://localhost:8000", description="URL pública del servidor de descargas."
     )
 
+    # -- Interfaz HITL (NiceGUI) --------------------------------------------
+    UI_LANGUAGE: str = Field(
+        default="es",
+        description=(
+            "Idioma por defecto de la interfaz HITL ('es' o 'en'). Cada sesión "
+            "puede cambiarlo en caliente desde la propia UI."
+        ),
+    )
+
     # -- Validadores --------------------------------------------------------
     @field_validator("APP_ENV", mode="before")
     @classmethod
@@ -177,6 +188,14 @@ class Settings(BaseSettings):
         normalized = str(value).strip().lower() if value is not None else ""
         if normalized not in ("local", "production"):
             raise ValueError("APP_ENV debe ser 'local' o 'production'")
+        return normalized
+
+    @field_validator("UI_LANGUAGE", mode="before")
+    @classmethod
+    def _normalize_ui_language(cls, value: object) -> str:
+        normalized = str(value).strip().lower() if value is not None else ""
+        if normalized not in SUPPORTED_LOCALES:
+            raise ValueError("UI_LANGUAGE debe ser uno de: " + ", ".join(SUPPORTED_LOCALES))
         return normalized
 
     @field_validator("DB_PATH", "DOWNLOADS_DIR", "UPLOADS_DIR")
@@ -313,6 +332,7 @@ class Settings(BaseSettings):
             "mcp_port": self.MCP_PORT,
             "ui_public_url": self.UI_PUBLIC_URL,
             "download_public_url": self.DOWNLOAD_PUBLIC_URL,
+            "ui_language": self.UI_LANGUAGE,
         }
 
 

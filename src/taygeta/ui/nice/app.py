@@ -16,6 +16,9 @@ El flujo es:
 
 Se ejecuta con ``python -m taygeta.ui.nice`` o con el entry point
 ``taygeta-ui``.
+
+Todo el texto visible se resuelve con :func:`taygeta.i18n.t` (catálogos
+``es``/``en``); las cadenas se mantienen en los catálogos, no en este módulo.
 """
 
 from __future__ import annotations
@@ -36,13 +39,20 @@ from taygeta.core.schema import (
 )
 from taygeta.core.settings import Settings, get_settings
 from taygeta.domain.taxonomy import format_course_name
+from taygeta.i18n import get_locale, t
 from taygeta.ingest.pipeline import IngestPipeline
 from taygeta.server.db import Database, DatabaseError
 from taygeta.server.object_storage import ObjectStorage
 from taygeta.ui.nice import caption
+from taygeta.ui.nice.localization import (
+    install_ui_language,
+    language_switcher,
+    quasar_locale,
+)
 from taygeta.ui.nice.math_render import install_math_rendering
 from taygeta.ui.nice.question_panel import PanelDraft, QuestionPanel
 from taygeta.ui.nice.state import QuestionState, SessionState, drop, register
+from taygeta.ui.nice.taxonomy import install_taxonomy_names, invalidate_taxonomy_names
 from taygeta.ui.shared import (
     build_enriched_question,
     delete_asset,
@@ -64,6 +74,8 @@ def _resources() -> tuple[Settings, Database, ObjectStorage, IngestPipeline]:
     database = Database(settings=settings)
     storage = ObjectStorage(settings)
     pipeline = IngestPipeline(settings, storage=storage, database=database)
+    # Los nombres de taxonomía se resuelven desde la base de datos.
+    install_taxonomy_names(database)
     return settings, database, storage, pipeline
 
 
@@ -98,10 +110,10 @@ async def _on_upload(
         data = await e.file.read()
         path = save_upload(e.file.name, data, settings.UPLOADS_DIR)
     except Exception as exc:  # noqa: BLE001 - se informa al usuario, no se oculta
-        ui.notify(f"No se pudo guardar el archivo: {exc}", type="negative")
+        ui.notify(t("ui.app.upload_failed", error=exc), type="negative")
         return
     _refresh_docs(doc_select, settings)
-    ui.notify(f"Guardado en uploads: {path.name}", type="positive")
+    ui.notify(t("ui.app.upload_saved", name=path.name), type="positive")
 
 
 def _build_review(
@@ -118,19 +130,16 @@ def _build_review(
     panels: list[QuestionPanel] = []
     summary = result.summary()
     with ui.row().classes("w-full gap-4"):
-        _stat("Estado", summary["status"])
-        _stat("Total", str(summary["total"]))
+        _stat(t("ui.status.title"), summary["status"])
+        _stat(t("ui.status.total"), str(summary["total"]))
         _stat("VALID", str(summary["valid"]))
         _stat("NEEDS_ATTENTION", str(summary["needs_attention"]))
     if summary["session_id"]:
-        caption(f"Sesión de staging: `{summary['session_id']}`")
+        caption(t("ui.review.session", session_id=summary["session_id"]))
     if result.warnings:
-        with ui.expansion("Advertencias de OCR"):
+        with ui.expansion(t("ui.review.warnings")):
             ui.markdown("\n".join(f"- {warning}" for warning in result.warnings))
-    caption(
-        "La taxonomía, la dificultad y los prerrequisitos se infirieron automáticamente "
-        "durante la estructuración; revísalos y edítalos antes de confirmar."
-    )
+    caption(t("ui.review.note"))
 
     source_path = session.processed_path
     for index, staged in enumerate(result.questions):
@@ -149,7 +158,7 @@ def _build_review(
         )
     ui.separator()
     ui.button(
-        "Confirmar y persistir preguntas aprobadas",
+        t("ui.review.confirm_button"),
         color="primary",
         on_click=lambda: _confirm(session, panels, database, storage),
     )
@@ -172,7 +181,7 @@ async def _on_process(
     if session.processing:
         return
     if not doc_select.value:
-        ui.notify("Selecciona un documento de la lista", type="warning")
+        ui.notify(t("ui.app.doc_select_warning"), type="warning")
         return
     path = Path(settings.UPLOADS_DIR) / str(doc_select.value)
     if str(path) != session.processed_path:
@@ -181,20 +190,18 @@ async def _on_process(
         session.orphans = {}
     session.processing = True
     status_row.set_visibility(True)
-    status_label.set_text(
-        f"Procesando {path.name}: rasterización, OCR local, estructuración y validación…"
-    )
+    status_label.set_text(t("ui.app.processing", name=path.name))
     try:
         result = await run.io_bound(pipeline.ingest, path, hints=hint_input.value or None)
     except Exception as exc:  # noqa: BLE001 - se informa al usuario, no se oculta
         session.processing = False
         status_row.set_visibility(False)
-        ui.notify(f"Error de ingesta: {exc}", type="negative")
+        ui.notify(t("ui.app.ingest_error", error=exc), type="negative")
         return
     session.processing = False
     status_row.set_visibility(False)
     if result is None:
-        ui.notify("La ingesta fue cancelada.", type="warning")
+        ui.notify(t("ui.app.ingest_cancelled"), type="warning")
         return
     session.processed_path = str(path)
     session.staging = result
@@ -202,7 +209,7 @@ async def _on_process(
     review.clear()
     with review:
         _build_review(session, settings, database, storage, pipeline)
-    ui.notify(f"Ingesta completada: {result.status}", type="positive")
+    ui.notify(t("ui.app.ingest_done", status=result.status), type="positive")
 
 
 def _confirm(
@@ -249,27 +256,25 @@ def _confirm(
         )
         approved.append((approved_question, draft.new_prereqs))
     if not approved:
-        ui.notify("No hay preguntas aprobadas para guardar.", type="warning")
+        ui.notify(t("ui.review.nothing_approved"), type="warning")
         return
     invalid = [
         q for q, _ in approved if not _SLUG_RE.match(q.course) or not _SLUG_RE.match(q.topic)
     ]
     if invalid:
-        ui.notify(
-            "Curso y tema deben ser slugs válidos (minúsculas, dígitos y guion bajo).",
-            type="negative",
-        )
+        ui.notify(t("ui.review.invalid_slugs"), type="negative")
         return
     new_tags = sorted({slug for _, slugs in approved for slug in slugs})
     try:
         for question, _ in approved:
-            database.upsert_course(question.course, format_course_name(question.course))
+            database.upsert_course(question.course)
             database.upsert_topic(question.course, question.topic, question.subtopic)
         if new_tags:
             database.add_prerequisites(new_tags)
     except DatabaseError as exc:
-        ui.notify(f"No se pudo actualizar la taxonomía: {exc}", type="negative")
+        ui.notify(t("ui.review.taxonomy_error", error=exc), type="negative")
         return
+    invalidate_taxonomy_names()
     confirm_result = persist_approved_questions(
         [question for question, _ in approved],
         database,
@@ -278,10 +283,7 @@ def _confirm(
     )
     _purge_orphans(session, set(confirm_result.saved), storage)
     if confirm_result.saved:
-        ui.notify(
-            f"Persistidas {len(confirm_result.saved)} pregunta(s) en taygeta.db.",
-            type="positive",
-        )
+        ui.notify(t("ui.review.saved", count=len(confirm_result.saved)), type="positive")
     for error in confirm_result.errors:
         ui.notify(error, type="negative")
 
@@ -314,59 +316,76 @@ def _dark_mode_toggle() -> None:
         .props("round flat color=primary")
     )
     button.mark("toggle-modo-oscuro")
-    button.tooltip("Cambiar entre modo claro y oscuro")
+    button.tooltip(t("ui.dark_mode.tooltip"))
 
 
 @ui.page("/")
 def _index_page() -> None:
     settings, database, storage, pipeline = _resources()
     session = register(ui.context.client.id)
-    ui.page_title("Taygeta — Revisión HITL")
+    ui.page_title(t("ui.page.title"))
     # Carga KaTeX (recuadro de formato del enunciado) en el <head> de la página.
     install_math_rendering()
     _dark_mode_toggle()
+    language_switcher()
+    install_ui_language(get_locale())
 
     # Contenedor amplio: en pantallas anchas se aprovecha el espacio disponible
     # (hasta 1800 px) con poco margen lateral, en lugar del antiguo max-w-7xl.
     with ui.column().classes("w-full max-w-[1800px] mx-auto gap-2 px-2 py-4"):
-        ui.label("Taygeta — Ingesta y revisión Human-in-the-Loop").classes("text-2xl font-bold")
+        ui.label(t("ui.app.heading")).classes("text-2xl font-bold")
 
         # --- Estado y taxonomía ----------------------------------------
-        with ui.expansion("Estado"):
+        with ui.expansion(t("ui.status.title")):
             try:
                 status = database.status()
                 ui.markdown(
-                    f"- **BD**: `{status['db_path']}` · integridad: {status['integrity']} · "
-                    f"FTS5: {status['fts5_enabled']} · preguntas: {status['counts']['questions']}"
+                    t(
+                        "ui.status.db_line",
+                        db_path=status["db_path"],
+                        integrity=status["integrity"],
+                        fts5=status["fts5_enabled"],
+                        questions=status["counts"]["questions"],
+                    )
                 )
             except DatabaseError as exc:
-                ui.label(f"Base de datos no disponible: {exc}").classes("text-red-600")
+                ui.label(t("ui.status.db_unavailable", error=exc)).classes("text-red-600")
             endpoint = public_s3_url(settings.S3_ENDPOINT_URL, settings)
             caption(f"S3: {settings.S3_BUCKET} @ {endpoint}")
             if not settings.llm_configured:
+                ui.label(t("ui.status.llm_unconfigured")).classes("text-amber-600")
+            with ui.expansion(t("ui.status.taxonomy")):
                 ui.label(
-                    "LLM remoto sin configurar: la validación semántica quedará en NEEDS_ATTENTION."
-                ).classes("text-amber-600")
-            with ui.expansion("Taxonomía"):
-                ui.label("Cursos: " + ", ".join(c["slug"] for c in database.list_courses()))
+                    t(
+                        "ui.status.courses",
+                        courses=", ".join(
+                            format_course_name(c["slug"]) for c in database.list_courses()
+                        ),
+                    )
+                )
                 ui.label(
-                    "Prerrequisitos: " + ", ".join(p["slug"] for p in database.list_prerequisites())
+                    t(
+                        "ui.status.prerequisites",
+                        prerequisites=", ".join(p["slug"] for p in database.list_prerequisites()),
+                    )
                 )
 
         # --- 1. Subida ---------------------------------------------------
-        ui.label("1. Subir documento").classes("text-lg font-semibold")
+        ui.label(t("ui.app.section.upload")).classes("text-lg font-semibold")
         ui.upload(
-            label="PDF, PNG o JPG",
+            label=t("ui.app.upload_label"),
             auto_upload=True,
             on_upload=lambda e: _on_upload(e, session, doc_select, settings),
         )
 
         # --- 2. Procesar -------------------------------------------------
-        ui.label("2. Procesar").classes("text-lg font-semibold")
+        ui.label(t("ui.app.section.process")).classes("text-lg font-semibold")
         with ui.row().classes("w-full gap-4 items-center"):
-            doc_select = ui.select([], label="Documento a procesar").classes("w-80")
-            hint_input = ui.input("Contexto para el análisis (opcional)").classes("flex-1")
-            process_btn = ui.button("Procesar documento", color="primary")
+            doc_select = ui.select([], label=t("ui.app.doc_select")).classes(
+                "w-80 flex-1 max-w-full"
+            )
+            hint_input = ui.input(t("ui.app.hint")).classes("w-full")
+            process_btn = ui.button(t("ui.app.process_button"), color="primary")
         status_row = ui.row().classes("items-center gap-2")
         with status_row:
             ui.spinner(size="lg")
@@ -389,7 +408,7 @@ def _index_page() -> None:
         _refresh_docs(doc_select, settings)
 
         # --- 3. Revisión y confirmación ----------------------------------
-        ui.label("3. Revisión y confirmación").classes("text-lg font-semibold")
+        ui.label(t("ui.app.section.review")).classes("text-lg font-semibold")
         review = ui.column().classes("w-full gap-4")
         if session.staging is not None:
             with review:
@@ -398,15 +417,16 @@ def _index_page() -> None:
 
 def main() -> None:
     """Arranca el servidor NiceGUI de la revisión HITL."""
+    settings = get_settings()
     host = os.getenv("TAYGETA_UI_HOST", "0.0.0.0")
     port = int(os.getenv("TAYGETA_UI_PORT", "8501"))
     ui.run(
         host=host,
         port=port,
-        title="Taygeta — Revisión HITL",
+        title=t("ui.page.title", locale=settings.UI_LANGUAGE),
         show=False,
         reload=False,
-        language="es",
+        language=quasar_locale(settings.UI_LANGUAGE),
         # Necesario para app.storage.user (persistencia del modo oscuro).
         storage_secret=os.getenv("TAYGETA_UI_STORAGE_SECRET", "taygeta-hitl-local"),
     )

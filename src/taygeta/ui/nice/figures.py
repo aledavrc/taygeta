@@ -20,6 +20,7 @@ from nicegui import ui
 from PIL import Image
 
 from taygeta.core.urls import split_asset_reference
+from taygeta.i18n import t
 from taygeta.ingest.image_extractor import DEFAULT_DPI, crop_figure_bytes
 from taygeta.server.object_storage import ObjectStorage
 from taygeta.ui.figure_editing import build_new_figure
@@ -173,7 +174,7 @@ class DragBoxCropper:
         width: int,
         height: int,
         on_confirm: Callable[[dict[str, int]], None],
-        caption: str = "Arrastra para seleccionar la región",
+        caption: str | None = None,
         initial_box: dict[str, int] | None = None,
     ) -> None:
         self.width = int(width)
@@ -184,7 +185,7 @@ class DragBoxCropper:
         #: Última caja confirmada (o la semilla inicial); se redibuja al soltar.
         self.box: dict[str, int] | None = initial_box
         self.zoom = self.MIN_ZOOM
-        _caption(caption)
+        _caption(caption if caption is not None else t("ui.cropper.select_region"))
 
         with ui.row().classes("items-center gap-2"):
             self._zoom_out = (
@@ -208,7 +209,7 @@ class DragBoxCropper:
                 ui.button(icon="restart_alt", on_click=lambda: self._set_zoom(self.MIN_ZOOM))
                 .props("dense round flat")
                 .mark("cropper-zoom-reset")
-                .tooltip("Ajustar a la vista")
+                .tooltip(t("ui.cropper.zoom_reset"))
             )
 
         # El borde enmarca el viewport (no la imagen): al ampliar, la imagen se

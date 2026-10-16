@@ -41,3 +41,6 @@ AGENTS.md
 
 # Herramientas y sistema
 .DS_Store
+
+# Índice de inteligencia de código (generado por CodeGraph)
+.codegraph/

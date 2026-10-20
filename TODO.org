@@ -1,0 +1,47 @@
+#+title: Proyecto taygeta - TODO
+
+* Interfaz
+
+** Separación de interfaz
+
+La interfaz no debe estar totalmente unificada. Deberían haber diferentes paginas una para realizar la ingesta que es la que se le da al usuario del servidor MCP, una para consultar la base de datos actual y  una para la edición de preguntas la cual debería abrir una pagina nueva con solo esa pregunta y así evitar la sobrecarga de la pagina.
+
+** Mejorar la presentación de información
+
+La interfaz no debería tener indicadores como VALID o NEEDS_ATTENTION.
+
+** Mejora de estilo de la interfaz
+
+Mejorar el CSS de la pagina
+
+* Servidor
+
+** Eliminación de bordes previo a ingesta
+
+Usando un programa determinista y así mejorar la rapidez del reconocimiento por OCR. Tengo que pensar en una forma de analizar el procesamiento de fotografiás o simplemente usar este método para archivos PDF.
+
+** Sistema de permisos
+
+** Selección de dimension del tamaño de la figura
+
+** Almacenamiento de hash de archivos ya procesados
+
+** Soporte para multiples lenguajes
+
+* MCP
+
+** Resolver el tema de las sesiones de usuario
+
+?id_session=
+
+** Revisar la subida por MCP
+
+Solo se debe ver el archivo subido por el usuario en la sesión de edición manual.
+
+** Revision obligatoria de figuras
+
+Darle al usuario MCP la opción de edición manual cuando se encuentren figuras aun si todo el reconocimiento es valido.
+
+* Misceláneo:
+
+** Cerrar las ramas completadas o desfasadas
